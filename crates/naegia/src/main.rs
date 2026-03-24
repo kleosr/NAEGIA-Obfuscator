@@ -76,6 +76,12 @@ enum RunError {
     Pe(#[from] NaegiaPeError),
 }
 
+enum ProtectMode {
+    DryRun,
+    Identity { strip_debug: bool },
+    Obfuscate(ProtectConfig),
+}
+
 fn main() -> std::process::ExitCode {
     if let Err(e) = run() {
         eprintln!("naegia: {e}");
@@ -105,17 +111,10 @@ fn run() -> Result<(), RunError> {
             junk_imports,
             opaque_predicates,
         } => {
-            let bytes = fs::read(&input)?;
-            if dry_run {
-                naegia_pe::parse_and_validate_pe64(&bytes)?;
-                return Ok(());
-            }
-            let out = if identity {
-                if strip_debug {
-                    naegia_pe::protect_strip_debug_and_checksum(&bytes)?
-                } else {
-                    naegia_pe::protect_identity(&bytes)?
-                }
+            let mode = if dry_run {
+                ProtectMode::DryRun
+            } else if identity {
+                ProtectMode::Identity { strip_debug }
             } else {
                 let cfg = ProtectConfig {
                     strip_debug,
@@ -131,13 +130,40 @@ fn run() -> Result<(), RunError> {
                     junk_imports,
                     opaque_predicates,
                 };
-                naegia_pe::protect_with_config(&bytes, &cfg)?
+                ProtectMode::Obfuscate(cfg)
             };
-            if let Some(parent) = output.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&output, out)?;
+            run_protect(&input, &output, mode)?;
         }
     }
+    Ok(())
+}
+
+fn run_protect(input: &PathBuf, output: &PathBuf, mode: ProtectMode) -> Result<(), RunError> {
+    let bytes = fs::read(input)?;
+    match mode {
+        ProtectMode::DryRun => {
+            naegia_pe::parse_and_validate_pe64(&bytes)?;
+        }
+        ProtectMode::Identity { strip_debug } => {
+            let out = if strip_debug {
+                naegia_pe::protect_strip_debug_and_checksum(&bytes)?
+            } else {
+                naegia_pe::protect_identity(&bytes)?
+            };
+            write_output(output, &out)?;
+        }
+        ProtectMode::Obfuscate(cfg) => {
+            let out = naegia_pe::protect_with_config(&bytes, &cfg)?;
+            write_output(output, &out)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_output(path: &PathBuf, data: &[u8]) -> Result<(), RunError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, data)?;
     Ok(())
 }

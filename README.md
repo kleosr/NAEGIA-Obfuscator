@@ -1,8 +1,8 @@
 # NAEGIA-Obfuscator
 
-Small Rust workspace for post-processing PE32+ AMD64 executables on Windows. You run `naegia protect` on an `.exe`; the tool rewrites header-level metadata and optional noise after the mapped image, then fixes the PE checksum. Code and data sections stay on disk as they were, so the loader still sees the same RVAs and the program should behave the same.
+Small Rust workspace for post-processing PE32+ AMD64 executables on Windows. Run `naegia protect` on an `.exe`: it rewrites header-level metadata, optionally appends noise after the mapped image, then fixes the PE checksum. `.text` and data sections keep the same on-disk layout, so the loader still sees the same RVAs. For well-formed inputs that already ran correctly, output should behave the same; odd linkers or corner cases can still fail validation.
 
-The main target is `x86_64-pc-windows-msvc` builds (for example `cargo build --release`). Other PE64 files might work if they pass the same checks.
+The supported build is `x86_64-pc-windows-msvc` (for example `cargo build --release`). Any other PE64 image either passes the same checks or it does not; there is no broader compatibility promise.
 
 ## How the workflow runs
 
@@ -31,9 +31,9 @@ flowchart TD
 
 Identity mode skips E through L: you get either a byte copy or debug-directory stripping plus checksum, with no stub or name games.
 
-The static fingerprint pass rewrites header fields that scanners and first-pass RE triage lean on (build time, linker and image version words, bound-import directory pointer, COFF symbol table fields). None of that is required for the loader to map your image. The pass is cheap noise, not secrecy: anyone with time can still disassemble `.text`, follow strings, and trace behavior.
+The static fingerprint pass rewrites header fields that scanners and first-pass RE triage lean on: build time, linker and image version words, bound-import directory pointer, COFF symbol table fields. The loader does not need any of that to map a normal EXE. This is cheap noise, not secrecy. Given a disassembler and patience, `.text`, strings, and behavior are still there.
 
-If you need real resistance, you are looking at import encryption, a packer or split loader, control-flow obfuscation, string encryption, and anti-debug. Those belong in a different tool chain. NAEGIA stays in the “mess with the easy static story” lane on purpose.
+Real cover means import encryption, a packer or split loader, control-flow obfuscation, string encryption, anti-debug, and the rest of that toolchain. NAEGIA deliberately stays in the lane of ruining lazy static reads only.
 
 ## Repository layout
 
@@ -150,7 +150,7 @@ Details: [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.htm
 cargo test --workspace
 ```
 
-Windows-only integration tests: `protect_windows.rs` (baseline), `protect_layers_windows.rs` (aggressive flags + unsupported guards), and `protect_regression_windows.rs` (identity precedence, dry-run, invalid PE, double protect, full flag stack, no output on failure). CI uses `windows-latest`.
+Windows-only integration tests: `protect_windows.rs` (baseline), `protect_layers_windows.rs` (aggressive flags + unsupported guards), and `protect_regression_windows.rs` (identity precedence, dry-run, invalid PE, double protect, full flag stack, no output on failure). Each run uses the `naegia` binary built for the same profile as the test crate (`CARGO_BIN_EXE_naegia`), so debug tests exercise `target/debug/naegia.exe` and release runs (see CI) exercise `target/release/naegia.exe`. CI uses `windows-latest`, builds release, then re-runs integration tests with `--release`.
 
 ## Production / MVP checklist
 
