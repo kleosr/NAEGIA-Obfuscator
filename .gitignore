@@ -1,0 +1,53 @@
+# Rust / Cargo (never commit build trees)
+/target/
+**/target/
+*.rlib
+*.profdata
+*.profraw
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS / Linux junk
+.DS_Store
+*~
+*.swp
+*.swo
+
+# IDEs (local machine state; keep team-wide config in repo only if you strip these)
+.idea/
+.vscode/
+*.code-workspace
+
+# Cursor / local agent state (paths vary by install)
+.cursor/
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Logs & temp
+*.log
+*.tmp
+*.temp
+*.cache
+
+# Coverage / test output
+coverage/
+tarpaulin-report.html
+lcov.info
+*.gcda
+*.gcno
+
+# Merge / editor backup
+*.orig
+*.bak
+*.rej
+
+# Optional local output from running the tool
+*.protected.exe
+naegia_*.exe

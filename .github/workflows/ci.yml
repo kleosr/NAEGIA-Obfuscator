@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo test (debug)
+        run: cargo test --workspace --verbose
+      - name: cargo build (release)
+        run: cargo build --workspace --release --verbose
+      - name: cargo test (release, integration smoke)
+        run: cargo test -p naegia --test protect_windows --test protect_layers_windows --test protect_regression_windows --release --verbose
