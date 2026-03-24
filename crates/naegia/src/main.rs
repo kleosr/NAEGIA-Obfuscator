@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use naegia_pe::{NaegiaPeError, ProtectConfig};
@@ -111,34 +111,43 @@ fn run() -> Result<(), RunError> {
             junk_imports,
             opaque_predicates,
         } => {
-            let mode = if dry_run {
-                ProtectMode::DryRun
-            } else if identity {
-                ProtectMode::Identity { strip_debug }
-            } else {
-                let cfg = ProtectConfig {
-                    strip_debug,
-                    append_entropy_overlay: !no_overlay,
-                    patterned_entropy_overlay: patterned_overlay,
-                    decoy_metadata,
-                    nuclear_metadata,
-                    redirect_entry,
-                    anti_debug_entry,
-                    xor_rdata_zero_runs,
-                    scramble_imports,
-                    flatten_cfg,
-                    junk_imports,
-                    opaque_predicates,
-                };
-                ProtectMode::Obfuscate(cfg)
+            let cfg = ProtectConfig {
+                strip_debug,
+                append_entropy_overlay: !no_overlay,
+                patterned_entropy_overlay: patterned_overlay,
+                decoy_metadata,
+                nuclear_metadata,
+                redirect_entry,
+                anti_debug_entry,
+                xor_rdata_zero_runs,
+                scramble_imports,
+                flatten_cfg,
+                junk_imports,
+                opaque_predicates,
             };
-            run_protect(&input, &output, mode)?;
+            run_protect(
+                &input,
+                &output,
+                resolve_protect_mode(dry_run, identity, cfg),
+            )?;
         }
     }
     Ok(())
 }
 
-fn run_protect(input: &PathBuf, output: &PathBuf, mode: ProtectMode) -> Result<(), RunError> {
+fn resolve_protect_mode(dry_run: bool, identity: bool, config: ProtectConfig) -> ProtectMode {
+    if dry_run {
+        ProtectMode::DryRun
+    } else if identity {
+        ProtectMode::Identity {
+            strip_debug: config.strip_debug,
+        }
+    } else {
+        ProtectMode::Obfuscate(config)
+    }
+}
+
+fn run_protect(input: &Path, output: &Path, mode: ProtectMode) -> Result<(), RunError> {
     let bytes = fs::read(input)?;
     match mode {
         ProtectMode::DryRun => {
@@ -160,7 +169,7 @@ fn run_protect(input: &PathBuf, output: &PathBuf, mode: ProtectMode) -> Result<(
     Ok(())
 }
 
-fn write_output(path: &PathBuf, data: &[u8]) -> Result<(), RunError> {
+fn write_output(path: &Path, data: &[u8]) -> Result<(), RunError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

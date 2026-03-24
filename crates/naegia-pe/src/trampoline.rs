@@ -26,12 +26,35 @@ fn section_is_executable(c: u32) -> bool {
     (c & IMAGE_SCN_MEM_EXECUTE) != 0 || (c & IMAGE_SCN_CNT_CODE) != 0
 }
 
-fn trampoline_len(anti_debug: bool) -> usize {
-    (if anti_debug {
-        ANTI_DEBUG_PREAMBLE.len()
-    } else {
-        0
-    }) + 5
+/// Returns `Some(Ok((file_offset, rva)))` if `sec` contains a cave of `need_len` zero/CC bytes.
+fn search_section_for_cave(
+    image: &[u8],
+    sec: &SectionTable,
+    need_len: usize,
+) -> Option<Result<(usize, u32)>> {
+    let raw = sec.pointer_to_raw_data as usize;
+    let sz = sec.size_of_raw_data as usize;
+    if raw + sz > image.len() {
+        return None;
+    }
+    let data = &image[raw..raw + sz];
+    if data.len() < need_len {
+        return None;
+    }
+    for start in (0..=data.len() - need_len).rev() {
+        if data[start..start + need_len]
+            .iter()
+            .all(|&b| b == 0 || b == 0xCC)
+        {
+            let fo = raw + start;
+            let rva = match sec.virtual_address.checked_add(start as u32) {
+                Some(r) => r,
+                None => return Some(Err(NaegiaPeError::InvalidPe("cave RVA overflow"))),
+            };
+            return Some(Ok((fo, rva)));
+        }
+    }
+    None
 }
 
 /// Returns `(file_offset, rva)` of a cave with at least `need_len` bytes of 0x00 or 0xCC.
@@ -47,27 +70,8 @@ pub fn find_executable_cave(
         if !section_is_executable(sec.characteristics) {
             continue;
         }
-        let raw = sec.pointer_to_raw_data as usize;
-        let sz = sec.size_of_raw_data as usize;
-        if raw + sz > image.len() {
-            continue;
-        }
-        let data = &image[raw..raw + sz];
-        if data.len() < need_len {
-            continue;
-        }
-        for start in (0..=data.len() - need_len).rev() {
-            if data[start..start + need_len]
-                .iter()
-                .all(|&b| b == 0 || b == 0xCC)
-            {
-                let fo = raw + start;
-                let rva = sec
-                    .virtual_address
-                    .checked_add(start as u32)
-                    .ok_or(NaegiaPeError::InvalidPe("cave RVA overflow"))?;
-                return Ok((fo, rva));
-            }
+        if let Some(result) = search_section_for_cave(image, sec, need_len) {
+            return result;
         }
     }
     Err(NaegiaPeError::InvalidPe(
@@ -75,24 +79,27 @@ pub fn find_executable_cave(
     ))
 }
 
-fn assemble_trampoline(orig_ep_rva: u32, cave_rva: u32, anti_debug: bool) -> Vec<u8> {
-    let mut code = Vec::new();
-    if anti_debug {
-        code.extend_from_slice(ANTI_DEBUG_PREAMBLE);
-    }
-    let jmp_from = cave_rva.saturating_add(code.len() as u32).saturating_add(5);
+fn assemble_plain_trampoline(orig_ep_rva: u32, cave_rva: u32) -> Vec<u8> {
+    let jmp_from = cave_rva.saturating_add(5);
+    let rel = orig_ep_rva as i32 - jmp_from as i32;
+    let mut code = vec![0xE9u8];
+    code.extend_from_slice(&rel.to_le_bytes());
+    code
+}
+
+fn assemble_anti_debug_trampoline(orig_ep_rva: u32, cave_rva: u32) -> Vec<u8> {
+    let mut code = ANTI_DEBUG_PREAMBLE.to_vec();
+    let jmp_from = cave_rva
+        .saturating_add(ANTI_DEBUG_PREAMBLE.len() as u32)
+        .saturating_add(5);
     let rel = orig_ep_rva as i32 - jmp_from as i32;
     code.push(0xE9);
     code.extend_from_slice(&rel.to_le_bytes());
     code
 }
 
-/// Patch `image` in place: write trampoline at a cave and point the optional header EP at `cave_rva`.
-pub fn redirect_entry_through_cave(
-    image: &mut [u8],
-    sections: &[SectionTable],
-    anti_debug: bool,
-) -> Result<(u32, u32)> {
+/// Returns `(opt_header_offset, orig_ep_rva)` after validating the PE32+ optional header.
+fn read_validated_entry_point(image: &[u8]) -> Result<(usize, u32)> {
     let opt = pe_optional_header_raw_offset(image)?;
     if opt + 24 > image.len() {
         return Err(NaegiaPeError::InvalidPe("optional header"));
@@ -101,20 +108,47 @@ pub fn redirect_entry_through_cave(
     if magic != PE32_PLUS_MAGIC {
         return Err(NaegiaPeError::InvalidPe("not PE32+"));
     }
-    let orig_ep = u32::from_le_bytes(
-        image[opt + OPTIONAL_ENTRY_POINT_RVA_OFFSET..opt + OPTIONAL_ENTRY_POINT_RVA_OFFSET + 4]
-            .try_into()
-            .map_err(|_| NaegiaPeError::InvalidPe("entry read"))?,
-    );
-    let need = trampoline_len(anti_debug);
-    let (fo, cave_rva) = find_executable_cave(image, sections, need)?;
-    let stub = assemble_trampoline(orig_ep, cave_rva, anti_debug);
-    debug_assert_eq!(stub.len(), need);
+    let ep_bytes = image
+        [opt + OPTIONAL_ENTRY_POINT_RVA_OFFSET..opt + OPTIONAL_ENTRY_POINT_RVA_OFFSET + 4]
+        .try_into()
+        .map_err(|_| NaegiaPeError::InvalidPe("entry read"))?;
+    Ok((opt, u32::from_le_bytes(ep_bytes)))
+}
+
+fn write_entry_stub_at(
+    image: &mut [u8],
+    opt: usize,
+    fo: usize,
+    cave_rva: u32,
+    stub: &[u8],
+) -> Result<()> {
     if fo + stub.len() > image.len() {
         return Err(NaegiaPeError::InvalidPe("cave write OOB"));
     }
-    image[fo..fo + stub.len()].copy_from_slice(&stub);
+    image[fo..fo + stub.len()].copy_from_slice(stub);
     image[opt + OPTIONAL_ENTRY_POINT_RVA_OFFSET..opt + OPTIONAL_ENTRY_POINT_RVA_OFFSET + 4]
         .copy_from_slice(&cave_rva.to_le_bytes());
+    Ok(())
+}
+
+/// Patch `image`: write a plain `jmp rel32` trampoline at a code cave and redirect the EP.
+pub fn redirect_entry_plain(image: &mut [u8], sections: &[SectionTable]) -> Result<(u32, u32)> {
+    let (opt, orig_ep) = read_validated_entry_point(image)?;
+    let (fo, cave_rva) = find_executable_cave(image, sections, 5)?;
+    let stub = assemble_plain_trampoline(orig_ep, cave_rva);
+    write_entry_stub_at(image, opt, fo, cave_rva, &stub)?;
+    Ok((orig_ep, cave_rva))
+}
+
+/// Patch `image`: write anti-debug preamble + `jmp rel32` at a code cave and redirect the EP.
+pub fn redirect_entry_with_anti_debug(
+    image: &mut [u8],
+    sections: &[SectionTable],
+) -> Result<(u32, u32)> {
+    let (opt, orig_ep) = read_validated_entry_point(image)?;
+    let need = ANTI_DEBUG_PREAMBLE.len() + 5;
+    let (fo, cave_rva) = find_executable_cave(image, sections, need)?;
+    let stub = assemble_anti_debug_trampoline(orig_ep, cave_rva);
+    write_entry_stub_at(image, opt, fo, cave_rva, &stub)?;
     Ok((orig_ep, cave_rva))
 }

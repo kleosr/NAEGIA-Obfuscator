@@ -66,42 +66,13 @@ pub fn protect_with_config(image: &[u8], config: &ProtectConfig) -> Result<Vec<u
         let _ = strip_debug_data_directory(&mut out)?;
     }
     apply_metadata_obfuscation(&mut out, seed, config.decoy_metadata)?;
-
-    if !config.decoy_metadata && !config.nuclear_metadata {
-        apply_static_fingerprint_hardening(&mut out, seed)?;
-    } else {
-        if config.decoy_metadata {
-            apply_decoy_coff_timestamp(&mut out, seed)?;
-        } else {
-            obfuscate_coff_timestamp(&mut out, seed)?;
-        }
-        if config.nuclear_metadata {
-            apply_nuclear_optional_versions(&mut out)?;
-        } else {
-            obfuscate_optional_linker_versions(&mut out, seed)?;
-            obfuscate_optional_image_versions(&mut out, seed)?;
-        }
-        clear_bound_import_directory_entry(&mut out)?;
-        zero_coff_linked_symbol_table_fields(&mut out)?;
-    }
-
+    apply_fingerprint_pass(&mut out, seed, config)?;
     if config.xor_rdata_zero_runs {
         let sections = parse_and_validate_pe64(&out)?.sections.clone();
         strings_pad::xor_zero_runs_in_rdata(&mut out, &sections, seed)?;
     }
-
-    if config.redirect_entry {
-        let sections = parse_and_validate_pe64(&out)?.sections.clone();
-        trampoline::redirect_entry_through_cave(&mut out, &sections, config.anti_debug_entry)?;
-    }
-
-    if config.append_entropy_overlay {
-        if config.patterned_entropy_overlay {
-            push_patterned_entropy_overlay(&mut out, seed, DEFAULT_ENTROPY_OVERLAY_LEN);
-        } else {
-            push_entropy_overlay(&mut out, seed, DEFAULT_ENTROPY_OVERLAY_LEN);
-        }
-    }
+    apply_entry_redirect_if_configured(&mut out, config)?;
+    push_configured_entropy_overlay(&mut out, seed, config);
     write_pe_checksum(&mut out)?;
     let _ = parse_and_validate_pe64(&out)?;
     Ok(out)
@@ -115,4 +86,65 @@ pub fn protect_obfuscate_metadata(
 ) -> Result<Vec<u8>> {
     let cfg = ProtectConfig::metadata_only(strip_debug, append_entropy_overlay);
     protect_with_config(image, &cfg)
+}
+
+fn apply_fingerprint_pass(image: &mut [u8], seed: u64, config: &ProtectConfig) -> Result<()> {
+    if !config.decoy_metadata && !config.nuclear_metadata {
+        apply_static_fingerprint_hardening(image, seed)?;
+    } else {
+        apply_coff_timestamp_for_mode(image, seed, config)?;
+        apply_version_fields_for_mode(image, seed, config)?;
+        clear_bound_import_directory_entry(image)?;
+        zero_coff_linked_symbol_table_fields(image)?;
+    }
+    Ok(())
+}
+
+fn apply_coff_timestamp_for_mode(
+    image: &mut [u8],
+    seed: u64,
+    config: &ProtectConfig,
+) -> Result<()> {
+    if config.decoy_metadata {
+        apply_decoy_coff_timestamp(image, seed)
+    } else {
+        obfuscate_coff_timestamp(image, seed)
+    }
+}
+
+fn apply_version_fields_for_mode(
+    image: &mut [u8],
+    seed: u64,
+    config: &ProtectConfig,
+) -> Result<()> {
+    if config.nuclear_metadata {
+        apply_nuclear_optional_versions(image)
+    } else {
+        obfuscate_optional_linker_versions(image, seed)?;
+        obfuscate_optional_image_versions(image, seed)
+    }
+}
+
+fn apply_entry_redirect_if_configured(image: &mut [u8], config: &ProtectConfig) -> Result<()> {
+    if !config.redirect_entry {
+        return Ok(());
+    }
+    let sections = parse_and_validate_pe64(image)?.sections.clone();
+    if config.anti_debug_entry {
+        trampoline::redirect_entry_with_anti_debug(image, &sections)?;
+    } else {
+        trampoline::redirect_entry_plain(image, &sections)?;
+    }
+    Ok(())
+}
+
+fn push_configured_entropy_overlay(image: &mut Vec<u8>, seed: u64, config: &ProtectConfig) {
+    if !config.append_entropy_overlay {
+        return;
+    }
+    if config.patterned_entropy_overlay {
+        push_patterned_entropy_overlay(image, seed, DEFAULT_ENTROPY_OVERLAY_LEN);
+    } else {
+        push_entropy_overlay(image, seed, DEFAULT_ENTROPY_OVERLAY_LEN);
+    }
 }

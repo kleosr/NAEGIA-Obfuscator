@@ -1,89 +1,30 @@
 #![cfg(windows)]
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+mod common;
 
-use goblin::pe::PE;
+use std::process::Command;
 
 use naegia_pe::{
     debug_data_directory_entry, import_dll_names, parse_and_validate_pe64,
     DEFAULT_ENTROPY_OVERLAY_LEN,
 };
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-/// Workspace `target/{debug|release}` (matches how this test crate was built).
-fn workspace_target_dir() -> PathBuf {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    workspace_root().join("target").join(profile)
-}
-
-fn fixture_exe() -> &'static Path {
-    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
-    FIXTURE
-        .get_or_init(|| {
-            let root = workspace_root();
-            let manifest = root.join("fixtures/hello-windows/Cargo.toml");
-            let target_dir = root.join("fixtures/hello-windows/target");
-            let status = Command::new("cargo")
-                .args([
-                    "build",
-                    "--release",
-                    "--manifest-path",
-                    manifest.to_str().expect("utf8 manifest"),
-                ])
-                .env("CARGO_TARGET_DIR", &target_dir)
-                .status()
-                .expect("spawn cargo for fixture build");
-            assert!(status.success(), "fixture cargo build failed");
-            target_dir.join("release").join("hello-windows.exe")
-        })
-        .as_path()
-}
-
-fn run_naegia(args: &[&str]) -> std::process::ExitStatus {
-    let bin = env!("CARGO_BIN_EXE_naegia");
-    Command::new(bin).args(args).status().expect("spawn naegia")
-}
-
-/// Entry point, section RVAs/raw layout; must survive metadata-only obfuscation.
-fn assert_loader_relevant_layout_eq(a: &PE<'_>, b: &PE<'_>) {
-    let oa = a.header.optional_header.as_ref().expect("optional a");
-    let ob = b.header.optional_header.as_ref().expect("optional b");
-    assert_eq!(
-        oa.standard_fields.address_of_entry_point,
-        ob.standard_fields.address_of_entry_point
-    );
-    assert_eq!(a.sections.len(), b.sections.len());
-    for (s, t) in a.sections.iter().zip(b.sections.iter()) {
-        assert_eq!(s.virtual_address, t.virtual_address);
-        assert_eq!(s.virtual_size, t.virtual_size);
-        assert_eq!(s.size_of_raw_data, t.size_of_raw_data);
-        assert_eq!(s.pointer_to_raw_data, t.pointer_to_raw_data);
-        assert_eq!(s.characteristics, t.characteristics);
-    }
-}
-
 #[test]
 fn protect_identity_preserves_imports_and_runs() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_it_identity.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_it_identity.exe");
     let _ = std::fs::remove_file(&out);
 
-    let status = run_naegia(&[
-        "protect",
-        exe.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--identity",
-    ]);
+    let status = common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--identity",
+        ])
+        .status()
+        .expect("spawn naegia");
     assert!(status.success(), "naegia protect (identity) failed");
 
     let before = std::fs::read(exe).unwrap();
@@ -105,16 +46,19 @@ fn protect_identity_preserves_imports_and_runs() {
 
 #[test]
 fn protect_default_obfuscates_preserves_loader_surface_and_runs() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_obfuscate_default.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_obfuscate_default.exe");
     let _ = std::fs::remove_file(&out);
 
-    let status = run_naegia(&[
-        "protect",
-        exe.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-    ]);
+    let status = common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .expect("spawn naegia");
     assert!(
         status.success(),
         "naegia protect (default obfuscate) failed"
@@ -130,7 +74,7 @@ fn protect_default_obfuscates_preserves_loader_surface_and_runs() {
     let pe_in = parse_and_validate_pe64(&before).unwrap();
     let pe_out = parse_and_validate_pe64(&after).unwrap();
     assert_eq!(import_dll_names(&pe_in), import_dll_names(&pe_out));
-    assert_loader_relevant_layout_eq(&pe_in, &pe_out);
+    common::assert_loader_relevant_layout_eq(&pe_in, &pe_out);
 
     let opt_in = pe_in.header.optional_header.as_ref().expect("opt in");
     let opt_out = pe_out.header.optional_header.as_ref().expect("opt out");
@@ -184,27 +128,32 @@ fn protect_default_obfuscates_preserves_loader_surface_and_runs() {
 
 #[test]
 fn protect_obfuscate_is_deterministic() {
-    let exe = fixture_exe();
-    let out_a = workspace_target_dir().join("naegia_obf_det_a.exe");
-    let out_b = workspace_target_dir().join("naegia_obf_det_b.exe");
+    let exe = common::fixture_exe();
+    let out_a = common::workspace_target_dir().join("naegia_obf_det_a.exe");
+    let out_b = common::workspace_target_dir().join("naegia_obf_det_b.exe");
     let _ = std::fs::remove_file(&out_a);
     let _ = std::fs::remove_file(&out_b);
 
-    let args_base = ["protect", exe.to_str().unwrap(), "-o"];
-    assert!(run_naegia(&[
-        args_base[0],
-        args_base[1],
-        args_base[2],
-        out_a.to_str().unwrap()
-    ])
-    .success());
-    assert!(run_naegia(&[
-        args_base[0],
-        args_base[1],
-        args_base[2],
-        out_b.to_str().unwrap()
-    ])
-    .success());
+    assert!(common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            out_a.to_str().unwrap()
+        ])
+        .status()
+        .expect("spawn naegia")
+        .success());
+    assert!(common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            out_b.to_str().unwrap()
+        ])
+        .status()
+        .expect("spawn naegia")
+        .success());
 
     let a = std::fs::read(&out_a).unwrap();
     let b = std::fs::read(&out_b).unwrap();
@@ -213,17 +162,20 @@ fn protect_obfuscate_is_deterministic() {
 
 #[test]
 fn protect_strip_debug_with_obfuscation_keeps_imports_and_runs() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_it_strip.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_it_strip.exe");
     let _ = std::fs::remove_file(&out);
 
-    let status = run_naegia(&[
-        "protect",
-        exe.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--strip-debug",
-    ]);
+    let status = common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--strip-debug",
+        ])
+        .status()
+        .expect("spawn naegia");
     assert!(status.success(), "naegia protect --strip-debug failed");
 
     let before = std::fs::read(exe).unwrap();
@@ -233,7 +185,7 @@ fn protect_strip_debug_with_obfuscation_keeps_imports_and_runs() {
     let pe_in = parse_and_validate_pe64(&before).unwrap();
     let pe_out = parse_and_validate_pe64(&after).unwrap();
     assert_eq!(import_dll_names(&pe_in), import_dll_names(&pe_out));
-    assert_loader_relevant_layout_eq(&pe_in, &pe_out);
+    common::assert_loader_relevant_layout_eq(&pe_in, &pe_out);
 
     assert_eq!(
         debug_data_directory_entry(&after).unwrap(),
@@ -252,18 +204,21 @@ fn protect_strip_debug_with_obfuscation_keeps_imports_and_runs() {
 
 #[test]
 fn protect_no_overlay_keeps_on_disk_size_and_runs() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_no_overlay.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_no_overlay.exe");
     let _ = std::fs::remove_file(&out);
 
-    assert!(run_naegia(&[
-        "protect",
-        exe.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-        "--no-overlay",
-    ])
-    .success());
+    assert!(common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--no-overlay"
+        ])
+        .status()
+        .expect("spawn naegia")
+        .success());
 
     let before = std::fs::read(exe).unwrap();
     let after = std::fs::read(&out).unwrap();
@@ -284,15 +239,18 @@ fn protect_no_overlay_keeps_on_disk_size_and_runs() {
 
 #[test]
 fn protect_dry_run_succeeds() {
-    let exe = fixture_exe();
-    let dummy = workspace_target_dir().join("naegia_dry_run_unused.exe");
-    let status = run_naegia(&[
-        "protect",
-        exe.to_str().unwrap(),
-        "-o",
-        dummy.to_str().unwrap(),
-        "--dry-run",
-    ]);
+    let exe = common::fixture_exe();
+    let dummy = common::workspace_target_dir().join("naegia_dry_run_unused.exe");
+    let status = common::naegia()
+        .args([
+            "protect",
+            exe.to_str().unwrap(),
+            "-o",
+            dummy.to_str().unwrap(),
+            "--dry-run",
+        ])
+        .status()
+        .expect("spawn naegia");
     assert!(status.success(), "dry-run should validate only");
     assert!(!dummy.exists(), "dry-run must not create the output path");
 }

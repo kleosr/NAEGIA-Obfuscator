@@ -1,57 +1,17 @@
 #![cfg(windows)]
 
-use std::path::PathBuf;
+mod common;
+
 use std::process::Command;
-use std::sync::OnceLock;
 
 use naegia_pe::hash_name_ror13_upper;
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn workspace_target_dir() -> PathBuf {
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    workspace_root().join("target").join(profile)
-}
-
-fn fixture_exe() -> &'static std::path::Path {
-    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
-    FIXTURE
-        .get_or_init(|| {
-            let root = workspace_root();
-            let manifest = root.join("fixtures/hello-windows/Cargo.toml");
-            let target_dir = root.join("fixtures/hello-windows/target");
-            let status = Command::new("cargo")
-                .args([
-                    "build",
-                    "--release",
-                    "--manifest-path",
-                    manifest.to_str().expect("utf8 manifest"),
-                ])
-                .env("CARGO_TARGET_DIR", &target_dir)
-                .status()
-                .expect("spawn cargo for fixture build");
-            assert!(status.success(), "fixture cargo build failed");
-            target_dir.join("release").join("hello-windows.exe")
-        })
-        .as_path()
-}
-
-fn naegia() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_naegia"))
-}
-
 #[test]
 fn protect_redirect_entry_with_antidebug_runs_without_debugger() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_layer_redirect_ad.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_layer_redirect_ad.exe");
     let _ = std::fs::remove_file(&out);
-    assert!(naegia()
+    assert!(common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
@@ -71,11 +31,11 @@ fn protect_redirect_entry_with_antidebug_runs_without_debugger() {
 
 #[test]
 fn protect_redirect_entry_runs_hello() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_layer_redirect.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_layer_redirect.exe");
     let _ = std::fs::remove_file(&out);
     assert!(
-        naegia()
+        common::naegia()
             .args([
                 "protect",
                 exe.to_str().unwrap(),
@@ -96,10 +56,10 @@ fn protect_redirect_entry_runs_hello() {
 
 #[test]
 fn protect_decoy_and_patterned_overlay_runs() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_layer_decoy.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_layer_decoy.exe");
     let _ = std::fs::remove_file(&out);
-    assert!(naegia()
+    assert!(common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
@@ -118,10 +78,10 @@ fn protect_decoy_and_patterned_overlay_runs() {
 
 #[test]
 fn protect_nuclear_and_xor_rdata_runs() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_layer_nuclear.exe");
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_layer_nuclear.exe");
     let _ = std::fs::remove_file(&out);
-    assert!(naegia()
+    assert!(common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
@@ -141,9 +101,9 @@ fn protect_nuclear_and_xor_rdata_runs() {
 
 #[test]
 fn protect_scramble_imports_rejected() {
-    let exe = fixture_exe();
-    let out = workspace_target_dir().join("naegia_layer_scramble_unused.exe");
-    let st = naegia()
+    let exe = common::fixture_exe();
+    let out = common::workspace_target_dir().join("naegia_layer_scramble_unused.exe");
+    let st = common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
@@ -159,13 +119,13 @@ fn protect_scramble_imports_rejected() {
 
 #[test]
 fn protect_flatten_cfg_rejected() {
-    let exe = fixture_exe();
-    let st = naegia()
+    let exe = common::fixture_exe();
+    let st = common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
             "-o",
-            workspace_target_dir()
+            common::workspace_target_dir()
                 .join("naegia_flatten_unused.exe")
                 .to_str()
                 .unwrap(),
@@ -179,13 +139,13 @@ fn protect_flatten_cfg_rejected() {
 
 #[test]
 fn protect_junk_imports_rejected() {
-    let exe = fixture_exe();
-    let st = naegia()
+    let exe = common::fixture_exe();
+    let st = common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
             "-o",
-            workspace_target_dir()
+            common::workspace_target_dir()
                 .join("naegia_junk_unused.exe")
                 .to_str()
                 .unwrap(),
@@ -200,13 +160,13 @@ fn protect_junk_imports_rejected() {
 
 #[test]
 fn protect_opaque_predicates_rejected() {
-    let exe = fixture_exe();
-    let st = naegia()
+    let exe = common::fixture_exe();
+    let st = common::naegia()
         .args([
             "protect",
             exe.to_str().unwrap(),
             "-o",
-            workspace_target_dir()
+            common::workspace_target_dir()
                 .join("naegia_opaque_unused.exe")
                 .to_str()
                 .unwrap(),

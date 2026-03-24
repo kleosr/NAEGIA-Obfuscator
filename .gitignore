@@ -51,3 +51,6 @@ lcov.info
 # Optional local output from running the tool
 *.protected.exe
 naegia_*.exe
+
+# Local release copies (use GitHub Releases for published binaries)
+/dist/
