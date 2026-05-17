@@ -10,7 +10,7 @@ Binary entry point. clap-derive CLI parses args, `resolve_protect_mode()` picks 
 
 | Task | File | Notes |
 |------|------|-------|
-| CLI struct, subcommands | `src/main.rs` | `Cli` derive, `Command::Protect` with all 15 flags |
+| CLI struct, subcommands | `src/main.rs` | `Cli` derive, `Command::Protect` with all 11 flags |
 | Mode resolution | `src/main.rs:138` | `resolve_protect_mode()` priority: dry_run, identity, obfuscate |
 | Dispatch logic | `src/main.rs:150` | `run_protect()`: read bytes, match mode, write output |
 | Error types | `src/main.rs:71` | `RunError`: `Io(std::io::Error)` / `Pe(NaegiaPeError)` |
@@ -32,7 +32,6 @@ Binary entry point. clap-derive CLI parses args, `resolve_protect_mode()` picks 
 
 - `--identity` with aggressive flags (`--redirect-entry`, `--decoy-metadata`, etc.) must produce a byte-identical copy, not a partial obfuscation. `resolve_protect_mode()` short-circuits before config is used.
 - `--anti-debug-entry` without `--redirect-entry` must fail (enforced by `ProtectConfig::validate()`).
-- Unimplemented flags (`--scramble-imports`, `--flatten-cfg`, `--junk-imports N`, `--opaque-predicates`) return error, no silent no-ops.
 - `--dry-run` must never write the `-o` path, even if other flags are present.
 - A failed run must not leave a partial output file on disk.
 - Never add new `ProtectMode` variants without updating `resolve_protect_mode()` priority chain.

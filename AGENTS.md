@@ -31,7 +31,8 @@ NAEGIA-Obfuscator/
 | Entropy tail | `crates/naegia-pe/src/anti_analysis/entropy.rs` | `DEFAULT_ENTROPY_OVERLAY_LEN` |
 | Code cave / entry redirect | `crates/naegia-pe/src/trampoline.rs` | `redirect_entry_plain`, `redirect_entry_with_anti_debug` |
 | PE validation | `crates/naegia-pe/src/validate.rs` | goblin-based parse |
-| Config / layers | `crates/naegia-pe/src/config.rs` | `ProtectConfig` defaults |
+| Raw offset arithmetic | `crates/naegia-pe/src/raw.rs` | `pe_signature_offset`, `pe_optional_header_raw_offset` |
+| Config / layers | `crates/naegia-pe/src/config.rs` | `ProtectConfig` (8 active flags) |
 | Integration tests | `crates/naegia/tests/` | Windows-only, use `CARGO_BIN_EXE_naegia` |
 | CI pipeline | `.github/workflows/ci.yml` | fmt + clippy + test (debug + release) |
 | Release workflow | `.github/workflows/release.yml` | tag v* triggers |
@@ -41,13 +42,11 @@ NAEGIA-Obfuscator/
 - **Rust edition 2021**, stable toolchain (rust-toolchain.toml pins stable).
 - Workspace resolver v2.
 - `thiserror` for error types, `goblin` for PE parsing.
-- `ProtectConfig::validate()` rejects unimplemented features at runtime with `NaegiaPeError::Unsupported`.
+- `ProtectConfig::validate()` rejects `anti_debug_entry` without `redirect_entry`.
 - Integration tests use `CARGO_BIN_EXE_naegia` env var to locate the binary built for the same profile.
-- `anti_debug_entry` requires `redirect_entry` (enforced by config validator).
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- Unimplemented features (`--scramble-imports`, `--flatten-cfg`, `--junk-imports`, `--opaque-predicates`) return `Unsupported` error — do not add silent no-ops.
 - Identity mode skips ALL obfuscation (stub, names, fingerprint, overlay) — do not accidentally apply transforms in identity path.
 - Entropy overlay invalidates Authenticode — `--no-overlay` MUST be used for signed binaries.
 - DOS stub scrubbing preserves `e_lfanew` — never overwrite bytes before 0x40.
