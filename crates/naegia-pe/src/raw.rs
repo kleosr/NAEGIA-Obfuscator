@@ -4,16 +4,25 @@ use crate::layout::{
     PE32_PLUS_DATA_DIRECTORIES_OFFSET, PE32_PLUS_MAGIC,
 };
 
-/// File offset of the PE optional header (COFF optional header), after `IMAGE_NT_HEADERS`.
-pub fn pe_optional_header_raw_offset(image: &[u8]) -> Result<usize> {
+/// File offset of the `PE\0\0` signature (start of `IMAGE_NT_HEADERS`).
+pub fn pe_signature_offset(image: &[u8]) -> Result<usize> {
     if image.len() < 0x40 {
         return Err(NaegiaPeError::InvalidPe("image too small for DOS header"));
     }
-    let pe_off = u32::from_le_bytes(image[0x3c..0x40].try_into().unwrap()) as usize;
+    let pe_off = u32::from_le_bytes(
+        image[0x3c..0x40]
+            .try_into()
+            .expect("slice is exactly 4 bytes after len >= 0x40 check"),
+    ) as usize;
     if pe_off + 24 > image.len() {
         return Err(NaegiaPeError::InvalidPe("invalid e_lfanew"));
     }
-    Ok(pe_off + 4 + 20)
+    Ok(pe_off)
+}
+
+/// File offset of the PE optional header (COFF optional header), after `IMAGE_NT_HEADERS`.
+pub fn pe_optional_header_raw_offset(image: &[u8]) -> Result<usize> {
+    pe_signature_offset(image).map(|off| off + 4 + 20)
 }
 
 /// File offset of the PE `CheckSum` field inside the optional header.
@@ -42,8 +51,16 @@ pub fn debug_data_directory_entry(image: &[u8]) -> Result<(u32, u32)> {
             "debug data directory out of bounds",
         ));
     }
-    let rva = u32::from_le_bytes(image[dir_off..dir_off + 4].try_into().unwrap());
-    let size = u32::from_le_bytes(image[dir_off + 4..dir_off + 8].try_into().unwrap());
+    let rva = u32::from_le_bytes(
+        image[dir_off..dir_off + 4]
+            .try_into()
+            .expect("slice is exactly 4 bytes after bounds check"),
+    );
+    let size = u32::from_le_bytes(
+        image[dir_off + 4..dir_off + 8]
+            .try_into()
+            .expect("slice is exactly 4 bytes after bounds check"),
+    );
     Ok((rva, size))
 }
 

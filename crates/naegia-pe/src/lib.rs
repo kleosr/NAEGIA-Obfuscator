@@ -2,12 +2,18 @@
 //!
 //! Layout assumptions follow the Microsoft PE specification:
 //! <https://learn.microsoft.com/en-us/windows/win32/debug/pe-format>
+//!
+//! This crate contains **zero `unsafe` blocks** — all memory manipulation is done
+//! through safe slice methods and checked arithmetic.  The lint below prevents
+//! accidental introduction of `unsafe` during maintenance.
+
+#![deny(unsafe_code)]
+#![warn(missing_docs)]
 
 mod anti_analysis;
 mod checksum;
 mod config;
 mod error;
-mod iat_hash;
 mod imports;
 mod layout;
 mod obfuscate;
@@ -20,7 +26,6 @@ mod validate;
 pub use anti_analysis::DEFAULT_ENTROPY_OVERLAY_LEN;
 pub use config::ProtectConfig;
 pub use error::{NaegiaPeError, Result};
-pub use iat_hash::hash_name_ror13_upper;
 pub use imports::import_dll_names;
 pub use raw::debug_data_directory_entry;
 pub use transform::{

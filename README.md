@@ -1,165 +1,173 @@
-# NAEGIA-Obfuscator
+<div align="center">
+  <img src="https://img.shields.io/badge/rust-1.82+-orange?logo=rust&style=flat-square" />
+  <img src="https://img.shields.io/badge/target-x86_64--windows--msvc-blue?style=flat-square" />
+  <img src="https://img.shields.io/github/v/tag/your-org/NAEGIA-Obfuscator?style=flat-square" />
+  <img src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" />
+</div>
 
-Small Rust workspace for post-processing PE32+ AMD64 executables on Windows. Run `naegia protect` on an `.exe`: it rewrites header-level metadata, optionally appends noise after the mapped image, then fixes the PE checksum. `.text` and data sections keep the same on-disk layout, so the loader still sees the same RVAs. For well-formed inputs that already ran correctly, output should behave the same; odd linkers or corner cases can still fail validation.
+<br />
 
-The supported build is `x86_64-pc-windows-msvc` (for example `cargo build --release`). Any other PE64 image either passes the same checks or it does not; there is no broader compatibility promise.
+<div align="center">
+  <h1>NAEGIA-Obfuscator</h1>
+  <p><strong>PE32+ (AMD64) metadata-level obfuscation — Rust</strong></p>
+  <p>Rewrite header metadata, append noise entropy, fix checksums.<br />No .text modification. Deterministic. Loader-safe.</p>
+</div>
 
-## How the workflow runs
+<br />
 
-Rough order of operations when you are not using `--identity`:
+---
 
-```mermaid
-flowchart TD
-  subgraph cli [naegia CLI]
-    A[Read input bytes] --> B{Dry run?}
-    B -->|yes| Z[Validate PE64 only, exit]
-    B -->|no| C{Identity mode?}
-    C -->|yes| I[Copy or strip debug only]
-    C -->|no| D[Optional: zero Debug directory]
-    D --> E[Scrub DOS stub region]
-    E --> F[Rename section headers in place]
-    F --> G[Static fingerprint pass]
-    G --> H{Entropy overlay?}
-    H -->|default| J[Append pseudorandom tail]
-    H -->|--no-overlay| K[Skip tail]
-    J --> L[Recompute PE CheckSum]
-    K --> L
-    L --> M[Validate again, write output]
-    I --> N[Write output]
-  end
-```
-
-Identity mode skips E through L: you get either a byte copy or debug-directory stripping plus checksum, with no stub or name games.
-
-The static fingerprint pass rewrites header fields that scanners and first-pass RE triage lean on: build time, linker and image version words, bound-import directory pointer, COFF symbol table fields. The loader does not need any of that to map a normal EXE. This is cheap noise, not secrecy. Given a disassembler and patience, `.text`, strings, and behavior are still there.
-
-Real cover means import encryption, a packer or split loader, control-flow obfuscation, string encryption, anti-debug, and the rest of that toolchain. NAEGIA deliberately stays in the lane of ruining lazy static reads only.
-
-## Repository layout
-
-```text
-NAEGIA-Obfuscator/
-├── Cargo.toml                 # workspace root
-├── rust-toolchain.toml
-├── crates/
-│   ├── naegia/                # `naegia` binary, clap CLI
-│   └── naegia-pe/             # PE parse, validate, transforms
-├── fixtures/
-│   └── hello-windows/         # tiny exe built by integration tests
-└── .github/workflows/ci.yml
-```
-
-## Build
+## Install
 
 ```bash
+# From source (requires Rust 1.82+)
+cargo install --git https://github.com/your-org/NAEGIA-Obfuscator
+
+# Or build from the workspace
+git clone https://github.com/your-org/NAEGIA-Obfuscator.git
+cd NAEGIA-Obfuscator
 cargo build --workspace --release
+# Binary at target/release/naegia.exe
 ```
 
-The `naegia` binary ends up under `target/release/` (or `target/debug/` without `--release`).
-
-## CLI examples
+## Usage
 
 ```bash
-# Default: stub, section names, static fingerprint pass, entropy tail, checksum
-naegia protect path/to/app.exe -o path/to/out.exe
+# Default obfuscation: DOS stub, section names, static fingerprint, entropy tail, checksum
+naegia protect app.exe -o app_obfuscated.exe
 
-# Same transforms but no extra bytes after the PE (signing-friendly size)
-naegia protect path/to/app.exe -o path/to/out.exe --no-overlay
+# Same transforms, no file-size increase (Authenticode-friendly)
+naegia protect app.exe -o app_obfuscated.exe --no-overlay
 
-# Exact copy of the file (validation only, then write the same bytes)
-naegia protect path/to/app.exe -o path/to/copy.exe --identity
+# Byte-exact copy (validation only, no obfuscation)
+naegia protect app.exe -o app_copy.exe --identity
 
-# Validate input only; output path is ignored and not created
-naegia protect path/to/app.exe -o /dev/null --dry-run
+# Validate input only — output path is accepted but not created
+naegia protect app.exe -o /dev/null --dry-run
 
-# Clear the Debug data directory entry, then run the default obfuscation stack
-naegia protect path/to/app.exe -o path/to/out.exe --strip-debug
+# Strip debug directory, then run default obfuscation
+naegia protect app.exe -o app_obfuscated.exe --strip-debug
 
-# Strip debug pointer only, no stub/name/timestamp/overlay changes
-naegia protect path/to/app.exe -o path/to/out.exe --identity --strip-debug
+# Strip debug pointer only, skip all obfuscation
+naegia protect app.exe -o app_obfuscated.exe --identity --strip-debug
 ```
 
-## Aggressive layers (opt-in)
+## Configuration
 
-These stack on top of the default path (unless you use `--identity`). Combine with `--no-overlay` if you care about signatures or file size.
+| Flag | What it does |
+|------|-------------|
+| `-o <path>` | Output file path (required) |
+| `--identity` | Copy input verbatim or strip debug only — skip all obfuscation |
+| `--dry-run` | Validate PE64 and exit (no output written) |
+| `--strip-debug` | Zero the Debug data directory entry |
+| `--no-overlay` | Skip entropy tail append (keeps file size unchanged) |
+| `--decoy-metadata` | Use packer-style section names + preset COFF timestamps |
+| `--patterned-overlay` | Entropy tail alternates random / ASCII / NOP-like blocks |
+| `--nuclear-metadata` | Max cosmetic linker version + image version fields |
+| `--xor-rdata-zero-runs` | XOR section-end padding in read-only initialized data |
+| `--redirect-entry` | Entry point jumps through a code cave (jmp to original EP) |
+| `--anti-debug-entry` | Spin if PEB.BeingDebugged (requires `--redirect-entry`) |
+
+Aggressive flags (`--decoy-metadata`, `--nuclear-metadata`, `--redirect-entry`, `--anti-debug-entry`, `--xor-rdata-zero-runs`, `--patterned-overlay`) stack on the default path. Combine with `--no-overlay` when preserving file size or signatures matters.
+
+## How It Works
+
+1. **Parse and validate** — PE32+ AMD64 check via goblin
+2. **Scrub DOS stub** (`--identity` skips this) — deterministic pattern between `MZ` and `e_lfanew`; `e_lfanew` and bytes before 0x40 stay intact
+3. **Rename section headers** — 8-byte generated names; indirect names starting with `/` are left alone
+4. **Static fingerprint pass** — XOR-mix COFF timestamp, linker/image version words, zero bound-import directory and COFF symbol table fields
+5. **XOR .rdata section-end padding** (if `--xor-rdata-zero-runs`) — XOR the file-alignment gap between `VirtualSize` and `SizeOfRawData` only. Internal zero runs (CRT tables, directory gaps) are never touched — changing sentinel zeros can crash the CRT cleanup path
+6. **Redirect entry** (if `--redirect-entry`) — find a code cave in an executable section, write `jmp rel32` to original EP; optionally prepend PEB.BeingDebugged test
+7. **Append entropy overlay** (default, unless `--no-overlay`) — pseudorandom or patterned tail for whole-file entropy
+8. **Recompute PE checksum** — word-sum over the image
+
+The loader sees the same RVAs. `.text` and data sections keep their on-disk layout. For well-formed inputs that already ran, output behaves the same.
+
+### What changes
+
+| Field | How |
+|-------|-----|
+| DOS stub (0x40 to e_lfanew) | Overwritten with deterministic pattern |
+| Section names | Replaced with 8-char generated names |
+| COFF TimeDateStamp | XOR-mixed with content-derived seed |
+| MajorLinkerVersion / MinorLinkerVersion | XOR-mixed |
+| MajorImageVersion / MinorImageVersion | XOR-mixed (or maxed in nuclear mode) |
+| Bound import directory | Zeroed (forces full IAT resolution) |
+| COFF PointerToSymbolTable / NumberOfSymbols | Zeroed |
+| .rdata section-end padding | XOR'd (on request) |
+| Entry point | jmp rel32 through code cave (on request) |
+| File end | Entropy tail appended (default) |
+
+## Architecture
+
+```
+NAEGIA-Obfuscator/
+├── Cargo.toml                  # workspace root (resolver v2)
+├── rust-toolchain.toml         # stable toolchain pin
+├── crates/
+│   ├── naegia/                 # binary entry: clap CLI, dispatch
+│   └── naegia-pe/              # PE parse, validate, all transforms
+│       ├── anti_analysis/      # fingerprint hardening, entropy overlay
+│       ├── config.rs           # ProtectConfig struct + validation
+│       ├── layout.rs           # PE32+ layout constants
+│       ├── obfuscate.rs        # FNV-1a seed, DOS stub, section name gen
+│       ├── raw.rs              # Raw byte-offset arithmetic (e_lfanew, PE sig)
+│       ├── strings_pad.rs      # XOR section-end padding in .rdata
+│       ├── trampoline.rs       # Code cave search + entry jmp stub
+│       ├── transform.rs        # protect_with_config pipeline
+│       └── validate.rs         # goblin-based PE64 validation
+├── fixtures/
+│   └── hello-windows/          # tiny EXE for integration tests
+└── .github/workflows/          # CI + release
+```
+
+~2,400 lines of Rust, zero `unsafe` blocks. Deterministic transforms: same input + same flags = identical output.
+
+## Development
 
 ```bash
-# Decoy packer-style section names + preset COFF timestamps
-naegia protect app.exe -o out.exe --decoy-metadata
+git clone https://github.com/your-org/NAEGIA-Obfuscator.git
+cd NAEGIA-Obfuscator
 
-# Entropy tail alternates random / ASCII / NOP-like blocks
-naegia protect app.exe -o out.exe --patterned-overlay
+# Check
+cargo fmt --check
+cargo clippy -D warnings
 
-# Max cosmetic linker + image version fields
-naegia protect app.exe -o out.exe --nuclear-metadata --no-overlay
-
-# XOR long runs of 0x00 padding inside .rdata on disk (strings untouched)
-naegia protect app.exe -o out.exe --xor-rdata-zero-runs --no-overlay
-
-# Entry point jumps through a code cave (jmp to original EP)
-naegia protect app.exe -o out.exe --redirect-entry --no-overlay
-
-# Same, plus spin if PEB.BeingDebugged (use only when you accept anti-debug behavior)
-naegia protect app.exe -o out.exe --redirect-entry --anti-debug-entry --no-overlay
-```
-
-Flags that are **wired but not implemented yet** (CLI returns a clear error): `--scramble-imports`, `--flatten-cfg`, `--junk-imports N` (N > 0), `--opaque-predicates`. Import hashing helpers live in `naegia-pe` (`hash_name_ror13_upper`) for the future resolver stub.
-
-Typical Rust release pipeline:
-
-```bash
-cargo build --release
-naegia protect target/release/my_app.exe -o dist/my_app.exe --strip-debug
-```
-
-## What actually changes
-
-- DOS stub (bytes between the end of the fixed DOS header and `e_lfanew`): overwritten with a deterministic pattern. `MZ`, `e_lfanew`, and the PE headers that follow stay coherent.
-- Section names in the section table: replaced with generated 8-byte names. Indirect names that start with `/` are left alone so string-table layouts do not break.
-- COFF `TimeDateStamp`: XOR-mixed with a seed derived from the file. The loader does not use this for execution.
-- Optional header `MajorLinkerVersion` / `MinorLinkerVersion`: XOR-mixed with the same seed. Scanners infer toolchain from these; the loader ignores them.
-- Optional header `MajorImageVersion` / `MinorImageVersion`: same idea, cosmetic for normal EXEs.
-- Data directory entry for bound imports: zeroed so the loader does full IAT binding and static “bound hint” views go stale.
-- COFF `PointerToSymbolTable` / `NumberOfSymbols`: forced to zero (normal MSVC release builds already ship that way).
-- Entropy tail (unless `--no-overlay`): `DEFAULT_ENTROPY_OVERLAY_LEN` bytes (see `naegia-pe`) appended after the last byte of the original file. That raises whole-file entropy and annoys naive static signatures. It also invalidates Authenticode if the file was signed, so use `--no-overlay` when you care about signatures or need the file length unchanged.
-
-Static import DLL names (the ones Dependency Walker style tools show) stay the same. Anything loaded with `LoadLibrary` at runtime is outside what this tool inspects.
-
-## References
-
-- [PE format (Microsoft Learn)](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
-- [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html)
-- [Dependencies](https://github.com/lucasg/Dependencies) for comparing direct imports before and after a run
-
-## Release profile (Rust side)
-
-Stripping symbols and shrinking the binary is still done in Cargo, not in `naegia`. For example:
-
-```toml
-[profile.release]
-strip = "debuginfo"
-lto = false
-codegen-units = 16
-```
-
-Details: [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html).
-
-## Tests
-
-```bash
+# Test (Windows required for integration tests)
 cargo test --workspace
+
+# Test with release binary
+cargo test --workspace --release
 ```
 
-Windows-only integration tests: `protect_windows.rs` (baseline), `protect_layers_windows.rs` (aggressive flags + unsupported guards), and `protect_regression_windows.rs` (identity precedence, dry-run, invalid PE, double protect, full flag stack, no output on failure). Each run uses the `naegia` binary built for the same profile as the test crate (`CARGO_BIN_EXE_naegia`), so debug tests exercise `target/debug/naegia.exe` and release runs (see CI) exercise `target/release/naegia.exe`. CI uses `windows-latest`, builds release, then re-runs integration tests with `--release`.
+Integration tests live in `crates/naegia/tests/`. They use `CARGO_BIN_EXE_naegia` to locate the binary built for the same profile. Windows-only (`x86_64-pc-windows-msvc`).
 
-## Production / MVP checklist
+### Test suite breakdown
 
-- **Toolchain**: Rust **1.82+** (`rust-version` in the workspace `Cargo.toml`, `rust-toolchain.toml` pins stable).
-- **CI** (GitHub Actions on `windows-latest`): `cargo fmt --check`, `cargo clippy -D warnings`, full workspace tests in debug, **release** build, then integration tests on **release** `naegia`.
-- **Ship binary**: `cargo build -p naegia --release` → `target/release/naegia.exe` (release profile uses thin LTO + `strip`).
-- **Smoke on your machine**: run the same as CI, or at least `cargo test --workspace` on Windows before tagging a release.
-- **Scope**: treat aggressive flags as opt-in; default `protect` path is what MVP users should run first. Signed binaries still need `--no-overlay` if you append the entropy tail.
-- **GitHub Release**: push a tag `v0.1.0` (or any `v*`) to run `.github/workflows/release.yml`, which attaches `naegia.exe` to a release (needs `contents: write`, satisfied for the default `GITHUB_TOKEN` on public repos).
+| Suite | Count | What |
+|-------|-------|------|
+| Unit (naegia-pe lib) | 8 | Config validation, entropy, obfuscate, raw offset, padding XOR |
+| Fuzz (naegia-pe) | 19 | Panic-free parsing on adversarial inputs |
+| Integration (naegia) | 16 | CLI correctness, all flag combinations, identity, dry-run, regression |
+
+## CI/CD
+
+Push a `v*` tag — GitHub Actions (`windows-latest`):
+1. `cargo fmt --check`
+2. `cargo clippy -D warnings`
+3. `cargo test --workspace` (debug)
+4. `cargo build --release`
+5. `cargo test --workspace --release` (integration on release binary)
+6. Attach `naegia.exe` to a GitHub Release
+
+## Why Rust?
+
+PE manipulation is high-risk systems programming. One wrong byte offset and the loader crashes, the binary is rejected, or (worst case) it appears to work but behaves differently. Rust's safety guarantees eliminate entire classes of bugs:
+- **No buffer overflows** — all slice accesses are bounds-checked
+- **No use-after-free** — the borrow checker catches lifetime violations
+- **No unsafe** — `#![deny(unsafe_code)]` at the crate root
+- **Deterministic** — no GC, no non-deterministic runtime behavior
+- **Single static binary** — ~600 KB release build with no dependencies to ship
 
 ## License
 

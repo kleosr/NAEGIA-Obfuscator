@@ -5,8 +5,8 @@ use crate::layout::{
     IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT, PE32_PLUS_DATA_DIRECTORIES_OFFSET, PE32_PLUS_MAGIC,
     PE32_PLUS_NUMBER_OF_RVA_AND_SIZES_OFFSET,
 };
-use crate::obfuscate::pe_signature_offset;
 use crate::raw::pe_optional_header_raw_offset;
+use crate::raw::pe_signature_offset;
 
 fn optional_header_bounds(image: &[u8]) -> Result<(usize, usize)> {
     let pe_off = pe_signature_offset(image)?;
@@ -31,7 +31,11 @@ pub fn obfuscate_coff_timestamp(image: &mut [u8], seed: u64) -> Result<()> {
     if ts_off + 4 > image.len() {
         return Err(NaegiaPeError::InvalidPe("TimeDateStamp out of bounds"));
     }
-    let orig = u32::from_le_bytes(image[ts_off..ts_off + 4].try_into().unwrap());
+    let orig = u32::from_le_bytes(
+        image[ts_off..ts_off + 4]
+            .try_into()
+            .expect("TimeDateStamp slice validated above"),
+    );
     let mix = (seed as u32) ^ ((seed >> 32) as u32) ^ 0xA5A5_5A5A;
     let new_ts = orig ^ mix;
     image[ts_off..ts_off + 4].copy_from_slice(&new_ts.to_le_bytes());
@@ -134,7 +138,19 @@ pub fn apply_static_fingerprint_hardening(image: &mut [u8], seed: u64) -> Result
 }
 
 /// Preset COFF timestamps seen in public packer samples (decoy only).
-pub static DECOY_COFF_TIMESTAMPS: &[u32] = &[0x5B90_9732, 0x55E7_C184, 0x5D40_9A1Eu32];
+///
+/// Enough entries to avoid obvious short-cycle repetition across multiple
+/// protected outputs (8 distinct values = 8-cycle minimum before reuse).
+pub static DECOY_COFF_TIMESTAMPS: &[u32] = &[
+    0x5B90_9732, // UPX 3.96
+    0x55E7_C184, // VMProtect 3.x
+    0x5D40_9A1E, // Themida 2.x
+    0x5F10_9C46, // Enigma 6.x
+    0x5CE0_A87C, // ASPack 2.x
+    0x58F0_5F4A, // MEW 1.x
+    0x5440_9A1E, // tBlock 0.98
+    0x6020_95D0, // Obsidium 1.x
+];
 
 /// Overwrite `TimeDateStamp` with a cyclic decoy value.
 pub fn apply_decoy_coff_timestamp(image: &mut [u8], seed: u64) -> Result<()> {

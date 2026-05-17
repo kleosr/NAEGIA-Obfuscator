@@ -1,3 +1,8 @@
+// The CLI binary delegates all unsafe-eligible work (PE parsing, byte manipulation)
+// to `naegia-pe`, which carries `#![deny(unsafe_code)]`.  This crate itself should
+// never introduce `unsafe` either.
+#![deny(unsafe_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,18 +58,6 @@ enum Command {
         /// XOR long runs of 0x00 padding inside `.rdata` on disk.
         #[arg(long)]
         xor_rdata_zero_runs: bool,
-        /// Not implemented yet (import directory rebuild + resolver stub).
-        #[arg(long)]
-        scramble_imports: bool,
-        /// Not implemented (needs LLVM / IR).
-        #[arg(long)]
-        flatten_cfg: bool,
-        /// Not implemented (synthetic import descriptors).
-        #[arg(long, default_value_t = 0)]
-        junk_imports: u32,
-        /// Not implemented (requires .text rewriting).
-        #[arg(long)]
-        opaque_predicates: bool,
     },
 }
 
@@ -106,10 +99,6 @@ fn run() -> Result<(), RunError> {
             redirect_entry,
             anti_debug_entry,
             xor_rdata_zero_runs,
-            scramble_imports,
-            flatten_cfg,
-            junk_imports,
-            opaque_predicates,
         } => {
             let cfg = ProtectConfig {
                 strip_debug,
@@ -120,10 +109,6 @@ fn run() -> Result<(), RunError> {
                 redirect_entry,
                 anti_debug_entry,
                 xor_rdata_zero_runs,
-                scramble_imports,
-                flatten_cfg,
-                junk_imports,
-                opaque_predicates,
             };
             run_protect(
                 &input,

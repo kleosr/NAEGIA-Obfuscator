@@ -35,6 +35,8 @@ pub fn push_patterned_entropy_overlay(image: &mut Vec<u8>, seed: u64, total_len:
     if total_len == 0 {
         return;
     }
+    // Pre-allocate to avoid repeated reallocation during byte-by-byte push.
+    image.reserve(total_len);
     let target_len = image.len().saturating_add(total_len);
     let mut st = seed ^ 0xBADC0FFEEBAD0000;
     let pattern = b"Copyright (C) NAEGIA. All rights reserved.\x00";
