@@ -12,7 +12,7 @@ pub use entropy::{
     push_entropy_overlay, push_patterned_entropy_overlay, DEFAULT_ENTROPY_OVERLAY_LEN,
 };
 pub use fingerprint::{
-    apply_decoy_coff_timestamp, apply_nuclear_optional_versions,
+    apply_decoy_coff_timestamp, apply_nuclear_optional_versions, apply_random_coff_timestamp,
     apply_static_fingerprint_hardening, clear_bound_import_directory_entry,
     obfuscate_coff_timestamp, obfuscate_optional_image_versions,
     obfuscate_optional_linker_versions, zero_coff_linked_symbol_table_fields,

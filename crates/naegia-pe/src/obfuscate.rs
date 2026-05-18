@@ -1,53 +1,13 @@
-//! Deterministic, loader-safe metadata obfuscation (DOS stub + section names).
+//! Loader-safe metadata obfuscation (DOS stub, section names, COFF string table).
 
 use crate::error::{NaegiaPeError, Result};
 use crate::raw;
 
-const FNV_OFFSET: u64 = 14695981039346656037;
-const FNV_PRIME: u64 = 1099511628211;
-
-/// Maximum number of sections we will process.
-///
-/// Real PE files rarely exceed 20 sections; 100 is a generous upper bound
-/// that still prevents pathological iteration over crafted or malicious
-/// headers without imposing an arbitrary per-allocation limit.
 const MAX_SECTIONS: usize = 100;
 
-/// Deterministic seed derived from the full image for stable transforms.
-///
-/// Samples both the beginning (first 4 KiB) and the end (last 4 KiB) of the file,
-/// then mixes in the total length.  This makes the seed depend on content from
-/// both headers and code/data body, not just the PE prefix.
-///
-/// The 8192-byte threshold ensures we only pay for the second FNV pass when the
-/// file is large enough that the prefix alone is not representative of the whole.
-/// Files ≤8 KiB are dominated by headers; the single-pass prefix hash is sufficient.
-pub(crate) fn obfuscation_seed(image: &[u8]) -> u64 {
-    let mut h = fnv1a_prefix(image, image.len().min(4096));
-    if image.len() > 8192 {
-        let tail = fnv1a_suffix(image, 4096);
-        h ^= tail.rotate_left(32);
-    }
-    h ^ ((image.len() as u64) << 1)
-}
+/// PE `IMAGE_SECTION_HEADER.Name` charset (8 bytes, no leading `/` indirection in output).
+const SECTION_CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._";
 
-/// FNV-1a over the first `take` bytes of `buf`.
-fn fnv1a_prefix(buf: &[u8], take: usize) -> u64 {
-    let mut h = FNV_OFFSET;
-    for &b in &buf[..take] {
-        h ^= b as u64;
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    h
-}
-
-/// FNV-1a over the last `take` bytes of `buf`.
-fn fnv1a_suffix(buf: &[u8], take: usize) -> u64 {
-    let start = buf.len().saturating_sub(take);
-    fnv1a_prefix(&buf[start..], take.min(buf.len() - start))
-}
-
-/// File offsets of each `IMAGE_SECTION_HEADER.Name` (8 bytes).
 fn section_name_raw_offsets(image: &[u8]) -> Result<Vec<usize>> {
     let pe_off = raw::pe_signature_offset(image)?;
     let num_sections = u16::from_le_bytes([image[pe_off + 6], image[pe_off + 7]]) as usize;
@@ -74,39 +34,77 @@ fn section_name_raw_offsets(image: &[u8]) -> Result<Vec<usize>> {
     Ok((0..num_sections).map(|i| table_off + i * 40).collect())
 }
 
-/// Fake packer-style names (8 bytes, PE `IMAGE_SECTION_HEADER` width).
-static DECOY_SECTION_NAMES: [[u8; 8]; 16] = [
-    *b"UPX0____",
-    *b"UPX1____",
-    *b".vmp0___",
-    *b".themida",
-    *b"ASPack__",
-    *b".enigma_",
-    *b"telock__",
-    *b"pex____.",
-    *b"petite__",
-    *b".mew____",
-    *b"kkrunchy",
-    *b"nspack__",
-    *b"fsg_____",
-    *b"mpress__",
-    *b"armadill",
-    *b"obsidium",
-];
+fn coff_string_table_offset(image: &[u8]) -> Result<usize> {
+    let pe_off = raw::pe_signature_offset(image)?;
+    let num_sections = u16::from_le_bytes([image[pe_off + 6], image[pe_off + 7]]) as usize;
+    let size_opt = u16::from_le_bytes([image[pe_off + 20], image[pe_off + 21]]) as usize;
+    pe_off
+        .checked_add(24)
+        .and_then(|o| o.checked_add(size_opt))
+        .and_then(|o| o.checked_add(num_sections.checked_mul(40)?))
+        .ok_or(NaegiaPeError::InvalidPe("string table offset overflow"))
+}
 
-fn decoy_section_name(index: usize) -> [u8; 8] {
-    DECOY_SECTION_NAMES[index % DECOY_SECTION_NAMES.len()]
+fn parse_coff_name_offset(name: &[u8; 8]) -> Option<usize> {
+    if name[0] != b'/' {
+        return None;
+    }
+    let mut off = 0usize;
+    for &b in &name[1..] {
+        if b == 0 {
+            break;
+        }
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        off = off.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+    }
+    Some(off)
 }
 
 fn obfuscated_section_name(index: usize, seed: u64) -> [u8; 8] {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut x = seed ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    let mut out = [b'.'; 8];
-    for slot in out.iter_mut().skip(1) {
+    let mut out = [0u8; 8];
+    for slot in &mut out {
         x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
-        *slot = CHARSET[(x as usize) % CHARSET.len()];
+        *slot = SECTION_CHARSET[(x as usize) % SECTION_CHARSET.len()];
     }
     out
+}
+
+/// Neutral high-entropy names (no packer impersonation) for `--decoy-metadata`.
+fn neutral_section_name(index: usize, seed: u64) -> [u8; 8] {
+    obfuscated_section_name(index, seed.wrapping_add(0xDEC0_C0DE_A5A5_0000))
+}
+
+fn obfuscate_coff_string_entry(
+    image: &mut [u8],
+    table_base: usize,
+    str_off: usize,
+    seed: u64,
+) -> Result<()> {
+    let start = table_base
+        .checked_add(str_off)
+        .ok_or(NaegiaPeError::InvalidPe(
+            "COFF string table offset overflow",
+        ))?;
+    if start >= image.len() {
+        return Err(NaegiaPeError::InvalidPe("COFF string table out of bounds"));
+    }
+    let end = image[start..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|p| start + p)
+        .unwrap_or(image.len());
+    if end == start {
+        return Ok(());
+    }
+    let mut x = seed ^ (str_off as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+    for b in &mut image[start..end] {
+        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *b = SECTION_CHARSET[(x as usize) % SECTION_CHARSET.len()];
+    }
+    Ok(())
 }
 
 /// Overwrites the DOS program stub (`[0x40 .. e_lfanew)`). Preserves `e_lfanew` at `0x3C`.
@@ -122,37 +120,51 @@ pub fn obfuscate_dos_stub(image: &mut [u8], seed: u64) -> Result<bool> {
     Ok(true)
 }
 
-/// Renames PE section headers in-place (8-byte names). Skips string-table indirection (`/`).
+/// Renames section headers and COFF string-table names referenced via `/offset`.
 pub fn obfuscate_section_names(image: &mut [u8], seed: u64) -> Result<usize> {
     let offs = section_name_raw_offsets(image)?;
+    let table_base = coff_string_table_offset(image)?;
     let mut n = 0usize;
     for (i, off) in offs.iter().enumerate() {
         if *off + 8 > image.len() {
             return Err(NaegiaPeError::InvalidPe("section name out of bounds"));
         }
-        if image[*off] == b'/' {
+        let mut name = [0u8; 8];
+        name.copy_from_slice(&image[*off..*off + 8]);
+        if name[0] == b'/' {
+            if let Some(str_off) = parse_coff_name_offset(&name) {
+                obfuscate_coff_string_entry(image, table_base, str_off, seed)?;
+                n += 1;
+            }
             continue;
         }
-        let name = obfuscated_section_name(i, seed);
-        image[*off..*off + 8].copy_from_slice(&name);
+        let generated = obfuscated_section_name(i, seed);
+        image[*off..*off + 8].copy_from_slice(&generated);
         n += 1;
     }
     Ok(n)
 }
 
-/// Same as [`obfuscate_section_names`] but uses packer-style decoy names.
-pub fn obfuscate_section_names_decoy(image: &mut [u8]) -> Result<usize> {
+/// Seed-derived neutral section names (`--decoy-metadata`).
+pub fn obfuscate_section_names_decoy(image: &mut [u8], seed: u64) -> Result<usize> {
     let offs = section_name_raw_offsets(image)?;
+    let table_base = coff_string_table_offset(image)?;
     let mut n = 0usize;
     for (i, off) in offs.iter().enumerate() {
         if *off + 8 > image.len() {
             return Err(NaegiaPeError::InvalidPe("section name out of bounds"));
         }
-        if image[*off] == b'/' {
+        let mut name = [0u8; 8];
+        name.copy_from_slice(&image[*off..*off + 8]);
+        if name[0] == b'/' {
+            if let Some(str_off) = parse_coff_name_offset(&name) {
+                obfuscate_coff_string_entry(image, table_base, str_off, seed.wrapping_add(0xA5A5))?;
+                n += 1;
+            }
             continue;
         }
-        let name = decoy_section_name(i);
-        image[*off..*off + 8].copy_from_slice(&name);
+        let generated = neutral_section_name(i, seed);
+        image[*off..*off + 8].copy_from_slice(&generated);
         n += 1;
     }
     Ok(n)
@@ -166,7 +178,7 @@ pub fn apply_metadata_obfuscation(
 ) -> Result<()> {
     obfuscate_dos_stub(image, seed)?;
     if decoy_section_names {
-        obfuscate_section_names_decoy(image)?;
+        obfuscate_section_names_decoy(image, seed)?;
     } else {
         obfuscate_section_names(image, seed)?;
     }
@@ -179,14 +191,12 @@ mod tests {
 
     #[test]
     fn section_table_offsets_sane_on_minimal_header() {
-        // MZ + e_lfanew=0x80 + padding to 0x80, minimal COFF + optional + 0 sections
         let mut buf = vec![0u8; 0x200];
         buf[0] = b'M';
         buf[1] = b'Z';
         buf[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
         let pe = 0x80usize;
         buf[pe..pe + 4].copy_from_slice(b"PE\0\0");
-        // COFF: machine amd64, 0 sections, time 0, sym 0, num sym 0, opt size 240 (fake), chars
         buf[pe + 4..pe + 6].copy_from_slice(&0x8664u16.to_le_bytes());
         buf[pe + 6..pe + 8].copy_from_slice(&0u16.to_le_bytes());
         buf[pe + 20..pe + 22].copy_from_slice(&240u16.to_le_bytes());

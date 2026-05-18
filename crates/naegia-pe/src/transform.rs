@@ -1,23 +1,26 @@
 use goblin::pe::section_table::SectionTable;
 
 use crate::anti_analysis::{
-    apply_decoy_coff_timestamp, apply_nuclear_optional_versions,
+    apply_decoy_coff_timestamp, apply_nuclear_optional_versions, apply_random_coff_timestamp,
     apply_static_fingerprint_hardening, clear_bound_import_directory_entry,
     obfuscate_coff_timestamp, obfuscate_optional_image_versions,
     obfuscate_optional_linker_versions, push_entropy_overlay, push_patterned_entropy_overlay,
-    zero_coff_linked_symbol_table_fields, DEFAULT_ENTROPY_OVERLAY_LEN,
+    zero_coff_linked_symbol_table_fields,
 };
 use crate::checksum::write_pe_checksum;
 use crate::config::ProtectConfig;
+use crate::debug_strip::wipe_debug_info;
 use crate::error::{NaegiaPeError, Result};
 use crate::layout::{
     IMAGE_DIRECTORY_ENTRY_DEBUG, PE32_PLUS_DATA_DIRECTORIES_OFFSET, PE32_PLUS_MAGIC,
 };
-use crate::obfuscate::{apply_metadata_obfuscation, obfuscation_seed};
+use crate::obfuscate::apply_metadata_obfuscation;
+use crate::pdb_scrub::scrub_pdb_path_strings;
 use crate::raw::pe_optional_header_raw_offset;
+use crate::seed::{os_random_u64, protect_seed};
 use crate::strings_pad;
 use crate::trampoline;
-use crate::validate::parse_and_validate_pe64;
+use crate::validate::{parse_and_validate_pe64, validate_pe64_after_transform};
 
 /// Validates PE64 and returns an owned copy (identity / pass-through baseline).
 pub fn protect_identity(image: &[u8]) -> Result<Vec<u8>> {
@@ -27,11 +30,8 @@ pub fn protect_identity(image: &[u8]) -> Result<Vec<u8>> {
 
 /// Zeros the Debug data directory entry (VirtualAddress + Size) for PE32+ images.
 ///
-/// This **only** detaches the loader-visible debug directory pointer per
-/// [`IMAGE_DIRECTORY_ENTRY_DEBUG`](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
-/// The actual debug section content (`.debug$S`, `.debug$T`, etc.) remains in the file
-/// and can still be recovered by section-scanning tools.
-/// For full debug removal, compile the original binary with `strip = true` in `Cargo.toml`.
+/// Prefer [`protect_with_config`] with `strip_debug: true`, which also wipes debug
+/// directory bytes and common `.debug*` section payloads.
 pub fn strip_debug_data_directory(image: &mut [u8]) -> Result<bool> {
     parse_and_validate_pe64(image)?;
     let opt = pe_optional_header_raw_offset(image)?;
@@ -53,52 +53,44 @@ pub fn strip_debug_data_directory(image: &mut [u8]) -> Result<bool> {
     Ok(was_set)
 }
 
-/// Identity copy, then strip debug directory (if present), then recompute PE checksum.
+/// Identity copy, then full debug wipe, then recompute PE checksum.
 pub fn protect_strip_debug_and_checksum(image: &[u8]) -> Result<Vec<u8>> {
+    let pe = parse_and_validate_pe64(image)?;
+    let sections = pe.sections.clone();
     let mut out = protect_identity(image)?;
-    let _ = strip_debug_data_directory(&mut out)?;
+    let _ = wipe_debug_info(&mut out, &sections)?;
     write_pe_checksum(&mut out)?;
+    validate_pe64_after_transform(&out)?;
     Ok(out)
 }
 
 /// Full pipeline with optional aggressive layers (entry trampoline, decoy metadata, etc.).
-///
-/// Parses the PE exactly once at the start and caches the section table for all
-/// downstream transforms that need section-level layout information.  A final
-/// re-validation is still performed on the mutated output to guarantee the result
-/// is still a well-formed PE32+ image.
 pub fn protect_with_config(image: &[u8], config: &ProtectConfig) -> Result<Vec<u8>> {
     config.validate()?;
     let pe = parse_and_validate_pe64(image)?;
-    // Clone section tables once: they own their data and are safe to use after
-    // the output buffer has been mutated (goblin's PE borrow is tied to `image`).
     let sections: Vec<SectionTable> = pe.sections.clone();
-    let seed = obfuscation_seed(image);
+
+    let (random_entropy, random_ts) = resolve_random_material(config)?;
+    let seed = protect_seed(image, random_entropy);
+
     let mut out = image.to_vec();
     if config.strip_debug {
-        let _ = strip_debug_data_directory(&mut out)?;
+        let _ = wipe_debug_info(&mut out, &sections)?;
     }
-    apply_metadata_obfuscation(&mut out, seed, config.decoy_metadata)?;
-    apply_fingerprint_pass(&mut out, seed, config)?;
+    if config.scrub_pdb_paths {
+        let _ = scrub_pdb_path_strings(&mut out, &sections)?;
+    }
+    if config.obfuscate_metadata {
+        apply_metadata_obfuscation(&mut out, seed, config.decoy_metadata)?;
+        apply_fingerprint_pass(&mut out, seed, config, random_ts)?;
+    }
     if config.xor_rdata_zero_runs {
         strings_pad::xor_zero_runs_in_rdata(&mut out, &sections, seed)?;
     }
     apply_entry_redirect_if_configured(&mut out, &sections, config, seed)?;
     push_configured_entropy_overlay(&mut out, seed, config);
     write_pe_checksum(&mut out)?;
-    // Final structural validation: re-parse with goblin to catch accidental
-    // PE-header corruption.  When `--xor-rdata-zero-runs` has modified section
-    // content (zero padding inside `.rdata`), goblin may fail to parse import
-    // strings etc.  These are content-level parse errors, not structural PE
-    // corruption, so we only propagate non-parse errors.
-    match parse_and_validate_pe64(&out) {
-        Ok(_) => {}
-        Err(NaegiaPeError::Parse(_)) => {
-            // Goblin parse failure after legitimate section-content
-            // modification is expected and benign.
-        }
-        Err(e) => return Err(e),
-    }
+    validate_pe64_after_transform(&out)?;
     Ok(out)
 }
 
@@ -112,11 +104,19 @@ pub fn protect_obfuscate_metadata(
     protect_with_config(image, &cfg)
 }
 
-fn apply_fingerprint_pass(image: &mut [u8], seed: u64, config: &ProtectConfig) -> Result<()> {
+fn apply_fingerprint_pass(
+    image: &mut [u8],
+    seed: u64,
+    config: &ProtectConfig,
+    random_ts: Option<u32>,
+) -> Result<()> {
     if !config.decoy_metadata && !config.nuclear_metadata {
         apply_static_fingerprint_hardening(image, seed)?;
+        if let Some(ts) = random_ts {
+            apply_random_coff_timestamp(image, ts)?;
+        }
     } else {
-        apply_coff_timestamp_for_mode(image, seed, config)?;
+        apply_coff_timestamp_for_mode(image, seed, config, random_ts)?;
         apply_version_fields_for_mode(image, seed, config)?;
         clear_bound_import_directory_entry(image)?;
         zero_coff_linked_symbol_table_fields(image)?;
@@ -128,8 +128,11 @@ fn apply_coff_timestamp_for_mode(
     image: &mut [u8],
     seed: u64,
     config: &ProtectConfig,
+    random_ts: Option<u32>,
 ) -> Result<()> {
-    if config.decoy_metadata {
+    if let Some(ts) = random_ts {
+        apply_random_coff_timestamp(image, ts)
+    } else if config.decoy_metadata {
         apply_decoy_coff_timestamp(image, seed)
     } else {
         obfuscate_coff_timestamp(image, seed)
@@ -166,13 +169,34 @@ fn apply_entry_redirect_if_configured(
     Ok(())
 }
 
+fn resolve_random_material(config: &ProtectConfig) -> Result<(Option<u64>, Option<u32>)> {
+    if !config.random_seed {
+        return Ok((None, None));
+    }
+    if let Some(fixed) = config.fixed_seed {
+        let ts = ((fixed >> 32) as u32) ^ (fixed as u32);
+        return Ok((Some(fixed), Some(ts)));
+    }
+    Ok((
+        Some(os_random_u64()?),
+        Some((os_random_u64()? & 0xFFFF_FFFF) as u32),
+    ))
+}
+
 fn push_configured_entropy_overlay(image: &mut Vec<u8>, seed: u64, config: &ProtectConfig) {
     if !config.append_entropy_overlay {
         return;
     }
+    let len = config.overlay_len;
     if config.patterned_entropy_overlay {
-        push_patterned_entropy_overlay(image, seed, DEFAULT_ENTROPY_OVERLAY_LEN);
+        push_patterned_entropy_overlay(image, seed, len);
     } else {
-        push_entropy_overlay(image, seed, DEFAULT_ENTROPY_OVERLAY_LEN);
+        push_entropy_overlay(image, seed, len);
     }
+}
+
+/// Re-read `path` and run post-transform validation (for CI / `--verify`).
+pub fn verify_written_image(path: &std::path::Path) -> Result<()> {
+    let bytes = std::fs::read(path).map_err(NaegiaPeError::Io)?;
+    validate_pe64_after_transform(&bytes)
 }

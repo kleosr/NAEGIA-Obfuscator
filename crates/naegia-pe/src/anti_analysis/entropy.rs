@@ -39,7 +39,6 @@ pub fn push_patterned_entropy_overlay(image: &mut Vec<u8>, seed: u64, total_len:
     image.reserve(total_len);
     let target_len = image.len().saturating_add(total_len);
     let mut st = seed ^ 0xBADC0FFEEBAD0000;
-    let pattern = b"Copyright (C) NAEGIA. All rights reserved.\x00";
     let mut phase: u64 = 0;
     while image.len() < target_len {
         let remain = target_len - image.len();
@@ -52,8 +51,9 @@ pub fn push_patterned_entropy_overlay(image: &mut Vec<u8>, seed: u64, total_len:
                 }
             }
             1 => {
-                for i in 0..take {
-                    image.push(pattern[i % pattern.len()]);
+                for _ in 0..take {
+                    let w = splitmix64(&mut st);
+                    image.push((w >> 8) as u8);
                 }
             }
             _ => {

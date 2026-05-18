@@ -12,6 +12,9 @@ pub const IMAGE_DIRECTORY_ENTRY_DEBUG: usize = 6;
 /// `IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT`
 pub const IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT: usize = 11;
 
+/// `IMAGE_DIRECTORY_ENTRY_SECURITY` (Authenticode certificate table)
+pub const IMAGE_DIRECTORY_ENTRY_SECURITY: usize = 4;
+
 /// Offset of `NumberOfRvaAndSizes` from the start of the optional header (PE32+).
 pub const PE32_PLUS_NUMBER_OF_RVA_AND_SIZES_OFFSET: usize = 108;
 

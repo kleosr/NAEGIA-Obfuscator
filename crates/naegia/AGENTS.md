@@ -10,7 +10,7 @@ Binary entry point. clap-derive CLI parses args, `resolve_protect_mode()` picks 
 
 | Task | File | Notes |
 |------|------|-------|
-| CLI struct, subcommands | `src/main.rs` | `Cli` derive, `Command::Protect` with all 11 flags |
+| CLI struct, subcommands | `src/main.rs` | `Cli` derive, `Command::Protect` with all 12 flags |
 | Mode resolution | `src/main.rs:138` | `resolve_protect_mode()` priority: dry_run, identity, obfuscate |
 | Dispatch logic | `src/main.rs:150` | `run_protect()`: read bytes, match mode, write output |
 | Error types | `src/main.rs:71` | `RunError`: `Io(std::io::Error)` / `Pe(NaegiaPeError)` |

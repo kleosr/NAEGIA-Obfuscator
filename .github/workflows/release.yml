@@ -4,23 +4,54 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   windows-binary:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust (rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
       - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test (release)
+        run: cargo test --workspace --release --verbose
+
       - name: Build naegia (release)
         run: cargo build -p naegia --release --verbose
+
+      - name: Stage versioned release binary
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path crates/naegia/Cargo.toml -Pattern '^version = "(.+)"').Matches.Groups[1].Value
+          $named = "target/release/naegia-${version}-x86_64-pc-windows-msvc.exe"
+          Copy-Item target/release/naegia.exe $named
+          Write-Host "Staged $named"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/naegia.exe
+          files: |
+            target/release/naegia.exe
+            target/release/naegia-*-x86_64-pc-windows-msvc.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

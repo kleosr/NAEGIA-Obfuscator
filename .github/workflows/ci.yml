@@ -5,26 +5,39 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   check:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust (rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
       - uses: Swatinem/rust-cache@v2
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
+
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: cargo test (debug)
         run: cargo test --workspace --verbose
+
       - name: cargo build (release)
         run: cargo build --workspace --release --verbose
-      - name: cargo test (release, integration smoke)
-        run: cargo test -p naegia --test protect_windows --test protect_layers_windows --test protect_regression_windows --release --verbose
+
+      - name: cargo test (release integration)
+        run: cargo test -p naegia --release --verbose
+
+      - name: smoke naegia version
+        run: target\release\naegia.exe --version

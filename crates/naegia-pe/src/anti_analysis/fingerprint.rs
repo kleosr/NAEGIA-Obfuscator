@@ -137,30 +137,26 @@ pub fn apply_static_fingerprint_hardening(image: &mut [u8], seed: u64) -> Result
     Ok(())
 }
 
-/// Preset COFF timestamps seen in public packer samples (decoy only).
-///
-/// Enough entries to avoid obvious short-cycle repetition across multiple
-/// protected outputs (8 distinct values = 8-cycle minimum before reuse).
-pub static DECOY_COFF_TIMESTAMPS: &[u32] = &[
-    0x5B90_9732, // UPX 3.96
-    0x55E7_C184, // VMProtect 3.x
-    0x5D40_9A1E, // Themida 2.x
-    0x5F10_9C46, // Enigma 6.x
-    0x5CE0_A87C, // ASPack 2.x
-    0x58F0_5F4A, // MEW 1.x
-    0x5440_9A1E, // tBlock 0.98
-    0x6020_95D0, // Obsidium 1.x
-];
-
-/// Overwrite `TimeDateStamp` with a cyclic decoy value.
+/// Replace `TimeDateStamp` with a seed-derived value (no packer preset impersonation).
 pub fn apply_decoy_coff_timestamp(image: &mut [u8], seed: u64) -> Result<()> {
     let pe_off = pe_signature_offset(image)?;
     let ts_off = pe_off + 8;
     if ts_off + 4 > image.len() {
         return Err(NaegiaPeError::InvalidPe("TimeDateStamp out of bounds"));
     }
-    let idx = (seed as usize) % DECOY_COFF_TIMESTAMPS.len();
-    image[ts_off..ts_off + 4].copy_from_slice(&DECOY_COFF_TIMESTAMPS[idx].to_le_bytes());
+    let ts = ((seed >> 32) as u32) ^ (seed as u32) ^ 0xA5A5_5A5A;
+    image[ts_off..ts_off + 4].copy_from_slice(&ts.to_le_bytes());
+    Ok(())
+}
+
+/// Write a CSPRNG `TimeDateStamp` (used with `--random-seed`).
+pub fn apply_random_coff_timestamp(image: &mut [u8], random_ts: u32) -> Result<()> {
+    let pe_off = pe_signature_offset(image)?;
+    let ts_off = pe_off + 8;
+    if ts_off + 4 > image.len() {
+        return Err(NaegiaPeError::InvalidPe("TimeDateStamp out of bounds"));
+    }
+    image[ts_off..ts_off + 4].copy_from_slice(&random_ts.to_le_bytes());
     Ok(())
 }
 

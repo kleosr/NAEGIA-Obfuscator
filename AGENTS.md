@@ -33,7 +33,8 @@ NAEGIA-Obfuscator/
 | PE validation | `crates/naegia-pe/src/validate.rs` | goblin-based parse |
 | Raw offset arithmetic | `crates/naegia-pe/src/raw.rs` | `pe_signature_offset`, `pe_optional_header_raw_offset` |
 | Config / layers | `crates/naegia-pe/src/config.rs` | `ProtectConfig` (8 active flags) |
-| Integration tests | `crates/naegia/tests/` | Windows-only, use `CARGO_BIN_EXE_naegia` |
+| Integration tests | `crates/naegia/tests/` | Windows-only; `inspect_windows`, `protect_*` |
+| Presets / inspect | `naegia-pe/src/preset.rs`, `inspect.rs` | `lab`, `release`, `signed`, `aggressive` |
 | CI pipeline | `.github/workflows/ci.yml` | fmt + clippy + test (debug + release) |
 | Release workflow | `.github/workflows/release.yml` | tag v* triggers |
 
@@ -53,7 +54,7 @@ NAEGIA-Obfuscator/
 
 ## UNIQUE STYLES
 
-- FNV-1a hash over first 4096 bytes + file length used as deterministic seed for transforms.
+- FNV-1a content seed (`seed::content_seed`); optional `--random-seed` mixes OS CSPRNG.
 - Section names use alphanumeric charset with leading `.` — indirect names starting with `/` are skipped.
 - Decoy section names cycle through UPX/ VMP/ themida/ ASPack presets.
 
