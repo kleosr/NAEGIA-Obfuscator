@@ -45,23 +45,6 @@ fn coff_string_table_offset(image: &[u8]) -> Result<usize> {
         .ok_or(NaegiaPeError::InvalidPe("string table offset overflow"))
 }
 
-fn parse_coff_name_offset(name: &[u8; 8]) -> Option<usize> {
-    if name[0] != b'/' {
-        return None;
-    }
-    let mut off = 0usize;
-    for &b in &name[1..] {
-        if b == 0 {
-            break;
-        }
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        off = off.checked_mul(10)?.checked_add((b - b'0') as usize)?;
-    }
-    Some(off)
-}
-
 fn obfuscated_section_name(index: usize, seed: u64) -> [u8; 8] {
     let mut x = seed ^ (index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     let mut out = [0u8; 8];
@@ -107,6 +90,53 @@ fn obfuscate_coff_string_entry(
     Ok(())
 }
 
+fn apply_section_name_pass(
+    image: &mut [u8],
+    seed: u64,
+    name_for_index: impl Fn(usize, u64) -> [u8; 8],
+    coff_entry_seed: impl Fn(u64) -> u64,
+) -> Result<usize> {
+    let offs = section_name_raw_offsets(image)?;
+    let table_base = coff_string_table_offset(image)?;
+    let mut n = 0usize;
+    for (i, off) in offs.iter().enumerate() {
+        if *off + 8 > image.len() {
+            return Err(NaegiaPeError::InvalidPe("section name out of bounds"));
+        }
+        let mut name = [0u8; 8];
+        name.copy_from_slice(&image[*off..*off + 8]);
+        if name[0] == b'/' {
+            if let Some(str_off) = parse_coff_name_offset(&name) {
+                obfuscate_coff_string_entry(image, table_base, str_off, coff_entry_seed(seed))?;
+                n += 1;
+            }
+            continue;
+        }
+        let generated = name_for_index(i, seed);
+        image[*off..*off + 8].copy_from_slice(&generated);
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[allow(clippy::question_mark)] // `?` in the loop; placing this fn after `impl` helpers avoids lizard span bleed.
+fn parse_coff_name_offset(name: &[u8; 8]) -> Option<usize> {
+    if name[0] != b'/' {
+        return None;
+    }
+    let mut off = 0usize;
+    for &b in &name[1..] {
+        if b == 0 {
+            break;
+        }
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        off = off.checked_mul(10)?.checked_add((b - b'0') as usize)?;
+    }
+    Some(off)
+}
+
 /// Overwrites the DOS program stub (`[0x40 .. e_lfanew)`). Preserves `e_lfanew` at `0x3C`.
 pub fn obfuscate_dos_stub(image: &mut [u8], seed: u64) -> Result<bool> {
     let pe_off = raw::pe_signature_offset(image)?;
@@ -122,52 +152,14 @@ pub fn obfuscate_dos_stub(image: &mut [u8], seed: u64) -> Result<bool> {
 
 /// Renames section headers and COFF string-table names referenced via `/offset`.
 pub fn obfuscate_section_names(image: &mut [u8], seed: u64) -> Result<usize> {
-    let offs = section_name_raw_offsets(image)?;
-    let table_base = coff_string_table_offset(image)?;
-    let mut n = 0usize;
-    for (i, off) in offs.iter().enumerate() {
-        if *off + 8 > image.len() {
-            return Err(NaegiaPeError::InvalidPe("section name out of bounds"));
-        }
-        let mut name = [0u8; 8];
-        name.copy_from_slice(&image[*off..*off + 8]);
-        if name[0] == b'/' {
-            if let Some(str_off) = parse_coff_name_offset(&name) {
-                obfuscate_coff_string_entry(image, table_base, str_off, seed)?;
-                n += 1;
-            }
-            continue;
-        }
-        let generated = obfuscated_section_name(i, seed);
-        image[*off..*off + 8].copy_from_slice(&generated);
-        n += 1;
-    }
-    Ok(n)
+    apply_section_name_pass(image, seed, obfuscated_section_name, |s| s)
 }
 
 /// Seed-derived neutral section names (`--decoy-metadata`).
 pub fn obfuscate_section_names_decoy(image: &mut [u8], seed: u64) -> Result<usize> {
-    let offs = section_name_raw_offsets(image)?;
-    let table_base = coff_string_table_offset(image)?;
-    let mut n = 0usize;
-    for (i, off) in offs.iter().enumerate() {
-        if *off + 8 > image.len() {
-            return Err(NaegiaPeError::InvalidPe("section name out of bounds"));
-        }
-        let mut name = [0u8; 8];
-        name.copy_from_slice(&image[*off..*off + 8]);
-        if name[0] == b'/' {
-            if let Some(str_off) = parse_coff_name_offset(&name) {
-                obfuscate_coff_string_entry(image, table_base, str_off, seed.wrapping_add(0xA5A5))?;
-                n += 1;
-            }
-            continue;
-        }
-        let generated = neutral_section_name(i, seed);
-        image[*off..*off + 8].copy_from_slice(&generated);
-        n += 1;
-    }
-    Ok(n)
+    apply_section_name_pass(image, seed, neutral_section_name, |s| {
+        s.wrapping_add(0xA5A5)
+    })
 }
 
 /// Apply DOS stub + section name obfuscation using a precomputed seed.
@@ -186,22 +178,4 @@ pub fn apply_metadata_obfuscation(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn section_table_offsets_sane_on_minimal_header() {
-        let mut buf = vec![0u8; 0x200];
-        buf[0] = b'M';
-        buf[1] = b'Z';
-        buf[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
-        let pe = 0x80usize;
-        buf[pe..pe + 4].copy_from_slice(b"PE\0\0");
-        buf[pe + 4..pe + 6].copy_from_slice(&0x8664u16.to_le_bytes());
-        buf[pe + 6..pe + 8].copy_from_slice(&0u16.to_le_bytes());
-        buf[pe + 20..pe + 22].copy_from_slice(&240u16.to_le_bytes());
-        let offs = section_name_raw_offsets(&buf)
-            .expect("section_name_raw_offsets should succeed on minimal valid PE header");
-        assert!(offs.is_empty());
-    }
-}
+mod tests;

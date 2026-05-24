@@ -12,7 +12,7 @@ PE32+ (AMD64) validation and transforms library. ~13 source files, most project 
 | `seed.rs` | `content_seed`, `protect_seed`, `os_random_u64` | FNV + optional CSPRNG |
 | `debug_strip.rs` | `wipe_debug_info` | Directory + section debug payloads |
 | `rva.rs` | `rva_range_file_bounds` | RVA → file offset |
-| `obfuscate.rs` | DOS stub, section + COFF string-table names | Full 8-byte charset |
+| `obfuscate/mod.rs` | DOS stub, section + COFF string-table names | Full 8-byte charset |
 | `config.rs` | `ProtectConfig` struct + `validate()` | 8 active flags; validates anti_debug requires redirect |
 | `validate.rs` | `parse_and_validate_pe64` | goblin-based parse, checks AMD64 + PE32+ magic + alignment |
 | `checksum.rs` | `write_pe_checksum`, `compute_pe_checksum` | Word-sum over image, skipping checksum field |

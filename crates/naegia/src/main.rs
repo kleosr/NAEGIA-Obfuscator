@@ -338,13 +338,13 @@ fn write_output(path: &Path, data: &[u8], verify: bool) -> Result<(), RunError> 
         ));
     }
     fs::create_dir_all(parent)?;
-    let tmp = parent.join(format!(
+    let staging_path = parent.join(format!(
         ".naegia-{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("out")
     ));
-    fs::write(&tmp, data)?;
-    if let Err(e) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
+    fs::write(&staging_path, data)?;
+    if let Err(e) = fs::rename(&staging_path, path) {
+        let _ = fs::remove_file(&staging_path);
         return Err(e.into());
     }
     if verify {

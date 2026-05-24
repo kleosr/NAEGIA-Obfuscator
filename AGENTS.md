@@ -26,7 +26,7 @@ NAEGIA-Obfuscator/
 |------|----------|-------|
 | CLI args / entry point | `crates/naegia/src/main.rs` | `run_protect` dispatch |
 | PE transforms | `crates/naegia-pe/src/transform.rs` | `protect_with_config` pipeline |
-| Section/name obfuscation | `crates/naegia-pe/src/obfuscate.rs` | FNV-1a seed, DOS stub, section renames |
+| Section/name obfuscation | `crates/naegia-pe/src/obfuscate/mod.rs` | FNV-1a seed, DOS stub, section renames |
 | Static fingerprint | `crates/naegia-pe/src/anti_analysis/fingerprint.rs` | COFF timestamp, linker versions, bound IAT |
 | Entropy tail | `crates/naegia-pe/src/anti_analysis/entropy.rs` | `DEFAULT_ENTROPY_OVERLAY_LEN` |
 | Code cave / entry redirect | `crates/naegia-pe/src/trampoline.rs` | `redirect_entry_plain`, `redirect_entry_with_anti_debug` |
