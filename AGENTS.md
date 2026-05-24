@@ -46,10 +46,23 @@ NAEGIA-Obfuscator/
 - `ProtectConfig::validate()` rejects `anti_debug_entry` without `redirect_entry`.
 - Integration tests use `CARGO_BIN_EXE_naegia` env var to locate the binary built for the same profile.
 
+## SECURITY
+
+- Input cap: `MAX_INPUT_BYTES` (256 MiB) in `config.rs`; enforced in `ensure_image_fits` / CLI `read_input_capped`.
+- Refuse entropy overlay when `authenticode_likely()` in `protect_with_config`.
+- CLI `write_output` rejects symlink output paths and symlink parents.
+- See `SECURITY.md` for threat model and reporting.
+
+## EDIT DISCIPLINE (minimal editing)
+
+- Brown-field default: smallest correct diff; preserve existing logic and structure.
+- One concern per change; no drive-by refactors or scope creep.
+- Read `AGENTS.md` + crate `AGENTS.md` before editing; run `cargo clippy` and relevant tests before done.
+
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - Identity mode skips ALL obfuscation (stub, names, fingerprint, overlay) — do not accidentally apply transforms in identity path.
-- Entropy overlay invalidates Authenticode — `--no-overlay` MUST be used for signed binaries.
+- Entropy overlay invalidates Authenticode — `--no-overlay` MUST be used for signed binaries (also enforced when cert directory is set).
 - DOS stub scrubbing preserves `e_lfanew` — never overwrite bytes before 0x40.
 
 ## UNIQUE STYLES

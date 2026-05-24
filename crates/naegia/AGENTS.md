@@ -28,6 +28,10 @@ Binary entry point. clap-derive CLI parses args, `resolve_protect_mode()` picks 
 - `ProtectMode` enum has 3 variants, never 4. No "identity + dry-run" hybrid.
 - CLI flags mirror `ProtectConfig` fields directly (no extra parsing layer).
 
+## SECURITY
+
+- `read_input_capped` enforces `MAX_INPUT_BYTES` before read; `write_output` rejects symlink `-o` / parent.
+
 ## ANTI-PATTERNS
 
 - `--identity` with aggressive flags (`--redirect-entry`, `--decoy-metadata`, etc.) must produce a byte-identical copy, not a partial obfuscation. `resolve_protect_mode()` short-circuits before config is used.

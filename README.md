@@ -58,6 +58,8 @@ naegia protect app.exe -o app_out.exe --preset release --seed 0xDEADBEEFCAFEBABE
 naegia protect app.exe -o app_out.exe --overlay-len 4096
 ```
 
+**Limits:** input files must be ≤ 256 MiB. Overlay append is refused when Authenticode is detected (`naegia inspect` shows `authenticode: likely`). See [SECURITY.md](SECURITY.md).
+
 ### Presets
 
 | Preset | Behavior |

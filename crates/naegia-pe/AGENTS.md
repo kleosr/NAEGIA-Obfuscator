@@ -36,8 +36,13 @@ PE32+ (AMD64) validation and transforms library. ~13 source files, most project 
 - Section names starting with `/` (string-table indirect) skipped
 - All transforms in `protect_with_config` gated behind a `ProtectConfig` flag
 
+## SECURITY
+
+- `MAX_INPUT_BYTES` (256 MiB): `ensure_image_fits` at parse entry; CLI pre-checks metadata.
+- `authenticode_likely()` + `protect_with_config` reject overlay when cert directory is set.
+
 ## ANTI-PATTERNS
 
 - Identity path (`protect_identity`) must skip ALL obfuscation (stub, names, fingerprint, overlay)
-- Entropy overlay invalidates Authenticode — `append_entropy_overlay: false` for signed binaries
+- Entropy overlay invalidates Authenticode — `append_entropy_overlay: false` for signed binaries (hard error if cert dir present)
 - Adding a transform to `protect_with_config` requires a new flag in `ProtectConfig`; never run unconditional
