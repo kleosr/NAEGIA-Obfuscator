@@ -1,13 +1,25 @@
 use goblin::pe::PE;
 
+use crate::config::MAX_INPUT_BYTES;
 use crate::error::{NaegiaPeError, Result};
 use crate::layout::{
     IMAGE_FILE_MACHINE_AMD64, IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, PE32_PLUS_MAGIC,
 };
 use crate::raw::{pe_optional_header_raw_offset, pe_signature_offset};
 
+/// Rejects images larger than [`MAX_INPUT_BYTES`].
+pub fn ensure_image_fits(len: usize) -> Result<()> {
+    if len > MAX_INPUT_BYTES {
+        return Err(NaegiaPeError::InvalidPe(
+            "image exceeds maximum size (256 MiB)",
+        ));
+    }
+    Ok(())
+}
+
 /// Parses and validates a PE32+ (AMD64) executable image suitable for NAEGIA processing.
 pub fn parse_and_validate_pe64(image: &[u8]) -> Result<PE<'_>> {
+    ensure_image_fits(image.len())?;
     if image.len() < 64 {
         return Err(NaegiaPeError::InvalidPe("image too small"));
     }
@@ -61,15 +73,82 @@ fn validate_section_raw_layout(image: &[u8], pe: &PE<'_>, file_alignment: u32) -
     Ok(())
 }
 
-/// Header/section layout checks without relying on goblin string/import parsing.
-pub fn validate_pe64_structural(image: &[u8]) -> Result<()> {
-    if image.len() < 64 {
-        return Err(NaegiaPeError::InvalidPe("image too small"));
+struct SectionTableRow {
+    virtual_size: u32,
+    virtual_address: u32,
+    raw_size: usize,
+    raw_ptr: usize,
+    characteristics: u32,
+}
+
+fn read_u32_le(image: &[u8], off: usize, what: &'static str) -> Result<u32> {
+    image[off..off + 4]
+        .try_into()
+        .map(u32::from_le_bytes)
+        .map_err(|_| NaegiaPeError::InvalidPe(what))
+}
+
+fn read_section_row(image: &[u8], sh: usize) -> Result<SectionTableRow> {
+    Ok(SectionTableRow {
+        virtual_size: read_u32_le(image, sh + 8, "section virtual size")?,
+        virtual_address: read_u32_le(image, sh + 12, "section virtual address")?,
+        raw_size: read_u32_le(image, sh + 16, "section raw size")? as usize,
+        raw_ptr: read_u32_le(image, sh + 20, "section raw pointer")? as usize,
+        characteristics: read_u32_le(image, sh + 36, "section characteristics")?,
+    })
+}
+
+fn validate_section_raw_bounds(image: &[u8], raw_ptr: usize, raw_sz: usize) -> Result<()> {
+    if raw_sz == 0 {
+        return Ok(());
     }
-    if image[0] != b'M' || image[1] != b'Z' {
-        return Err(NaegiaPeError::InvalidPe("missing MZ signature"));
+    let end = raw_ptr
+        .checked_add(raw_sz)
+        .ok_or(NaegiaPeError::InvalidPe("section raw overflow"))?;
+    if end > image.len() {
+        return Err(NaegiaPeError::InvalidPe("section raw data out of bounds"));
     }
-    let pe_off = pe_signature_offset(image)?;
+    Ok(())
+}
+
+fn section_is_executable(characteristics: u32) -> bool {
+    (characteristics & IMAGE_SCN_MEM_EXECUTE) != 0 || (characteristics & IMAGE_SCN_CNT_CODE) != 0
+}
+
+fn section_covers_rva(row: &SectionTableRow, rva: u32) -> bool {
+    let span = row.virtual_size.max(row.raw_size as u32);
+    rva >= row.virtual_address && rva < row.virtual_address.saturating_add(span)
+}
+
+fn entry_point_in_executable_section(
+    image: &[u8],
+    opt: usize,
+    size_opt: usize,
+    num_sections: usize,
+) -> Result<()> {
+    let ep = read_u32_le(image, opt + 16, "entry point read")?;
+    if ep == 0 {
+        return Ok(());
+    }
+    let mut ep_ok = false;
+    for i in 0..num_sections {
+        let sh = opt + size_opt + i * 40;
+        let row = read_section_row(image, sh)?;
+        validate_section_raw_bounds(image, row.raw_ptr, row.raw_size)?;
+        if section_covers_rva(&row, ep) && section_is_executable(row.characteristics) {
+            ep_ok = true;
+        }
+    }
+    if ep_ok {
+        Ok(())
+    } else {
+        Err(NaegiaPeError::InvalidPe(
+            "AddressOfEntryPoint not in an executable section",
+        ))
+    }
+}
+
+fn validate_coff_and_section_table(image: &[u8], pe_off: usize) -> Result<(usize, usize, usize)> {
     if pe_off + 24 > image.len() || &image[pe_off..pe_off + 4] != b"PE\0\0" {
         return Err(NaegiaPeError::InvalidPe("invalid PE signature"));
     }
@@ -101,44 +180,21 @@ pub fn validate_pe64_structural(image: &[u8]) -> Result<()> {
     if table_end > image.len() {
         return Err(NaegiaPeError::InvalidPe("section headers out of bounds"));
     }
+    Ok((opt, size_opt, num_sections))
+}
 
-    let ep = u32::from_le_bytes(
-        image[opt + 16..opt + 20]
-            .try_into()
-            .map_err(|_| NaegiaPeError::InvalidPe("entry point read"))?,
-    );
-    let mut ep_ok = ep == 0;
-    for i in 0..num_sections {
-        let sh = opt + size_opt + i * 40;
-        let va = u32::from_le_bytes(image[sh + 12..sh + 16].try_into().unwrap());
-        let vs = u32::from_le_bytes(image[sh + 8..sh + 12].try_into().unwrap());
-        let raw_ptr = u32::from_le_bytes(image[sh + 20..sh + 24].try_into().unwrap()) as usize;
-        let raw_sz = u32::from_le_bytes(image[sh + 16..sh + 20].try_into().unwrap()) as usize;
-        let ch = u32::from_le_bytes(image[sh + 36..sh + 40].try_into().unwrap());
-        if raw_sz > 0 {
-            let end = raw_ptr
-                .checked_add(raw_sz)
-                .ok_or(NaegiaPeError::InvalidPe("section raw overflow"))?;
-            if end > image.len() {
-                return Err(NaegiaPeError::InvalidPe("section raw data out of bounds"));
-            }
-        }
-        let span = vs.max(u32::from_le_bytes(
-            image[sh + 16..sh + 20].try_into().unwrap(),
-        ));
-        if ep >= va && ep < va.saturating_add(span) {
-            let exec = (ch & IMAGE_SCN_MEM_EXECUTE) != 0 || (ch & IMAGE_SCN_CNT_CODE) != 0;
-            if exec {
-                ep_ok = true;
-            }
-        }
+/// Header/section layout checks without relying on goblin string/import parsing.
+pub fn validate_pe64_structural(image: &[u8]) -> Result<()> {
+    ensure_image_fits(image.len())?;
+    if image.len() < 64 {
+        return Err(NaegiaPeError::InvalidPe("image too small"));
     }
-    if !ep_ok {
-        return Err(NaegiaPeError::InvalidPe(
-            "AddressOfEntryPoint not in an executable section",
-        ));
+    if image[0] != b'M' || image[1] != b'Z' {
+        return Err(NaegiaPeError::InvalidPe("missing MZ signature"));
     }
-    Ok(())
+    let pe_off = pe_signature_offset(image)?;
+    let (opt, size_opt, num_sections) = validate_coff_and_section_table(image, pe_off)?;
+    entry_point_in_executable_section(image, opt, size_opt, num_sections)
 }
 
 /// Prefer full goblin validation; fall back to structural checks when content parsing fails.
@@ -147,5 +203,16 @@ pub fn validate_pe64_after_transform(image: &[u8]) -> Result<()> {
         Ok(_) => Ok(()),
         Err(NaegiaPeError::Parse(_)) => validate_pe64_structural(image),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_image_fits_rejects_over_limit() {
+        assert!(ensure_image_fits(MAX_INPUT_BYTES + 1).is_err());
+        assert!(ensure_image_fits(MAX_INPUT_BYTES).is_ok());
     }
 }

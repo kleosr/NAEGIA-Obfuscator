@@ -94,6 +94,13 @@ impl PeInspectReport {
     }
 }
 
+/// True when the PE security directory is set (Authenticode likely — avoid entropy overlay).
+pub fn authenticode_likely(image: &[u8]) -> bool {
+    security_directory_entry(image)
+        .map(|(rva, size)| rva != 0 && size != 0)
+        .unwrap_or(false)
+}
+
 fn security_directory_entry(image: &[u8]) -> Result<(u32, u32)> {
     let opt = pe_optional_header_raw_offset(image)?;
     let dir_off =

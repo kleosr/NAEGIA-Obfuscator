@@ -11,6 +11,7 @@ use crate::checksum::write_pe_checksum;
 use crate::config::ProtectConfig;
 use crate::debug_strip::wipe_debug_info;
 use crate::error::{NaegiaPeError, Result};
+use crate::inspect::authenticode_likely;
 use crate::layout::{
     IMAGE_DIRECTORY_ENTRY_DEBUG, PE32_PLUS_DATA_DIRECTORIES_OFFSET, PE32_PLUS_MAGIC,
 };
@@ -67,6 +68,11 @@ pub fn protect_strip_debug_and_checksum(image: &[u8]) -> Result<Vec<u8>> {
 /// Full pipeline with optional aggressive layers (entry trampoline, decoy metadata, etc.).
 pub fn protect_with_config(image: &[u8], config: &ProtectConfig) -> Result<Vec<u8>> {
     config.validate()?;
+    if config.append_entropy_overlay && authenticode_likely(image) {
+        return Err(NaegiaPeError::InvalidPe(
+            "authenticode certificate directory present; use --no-overlay or --preset signed",
+        ));
+    }
     let pe = parse_and_validate_pe64(image)?;
     let sections: Vec<SectionTable> = pe.sections.clone();
 

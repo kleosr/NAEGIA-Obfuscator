@@ -7,7 +7,7 @@ use std::process;
 use clap::{Parser, Subcommand, ValueEnum};
 use naegia_pe::{
     NaegiaPeError, PeInspectReport, Preset, ProtectConfig, DEFAULT_ENTROPY_OVERLAY_LEN,
-    MAX_OVERLAY_LEN,
+    MAX_INPUT_BYTES, MAX_OVERLAY_LEN,
 };
 use thiserror::Error;
 
@@ -139,7 +139,7 @@ fn run() -> Result<(), RunError> {
     let cli = Cli::parse();
     match cli.command {
         Command::Inspect { input } => {
-            let bytes = fs::read(&input)?;
+            let bytes = read_input_capped(&input)?;
             let report = PeInspectReport::from_image(&bytes)?;
             print!("{}", report.to_text());
         }
@@ -269,13 +269,34 @@ fn resolve_protect_mode(dry_run: bool, identity: bool, config: ProtectConfig) ->
     }
 }
 
+fn read_input_capped(path: &Path) -> Result<Vec<u8>, RunError> {
+    let meta = fs::metadata(path)?;
+    if meta.len() > MAX_INPUT_BYTES as u64 {
+        return Err(RunError::Pe(NaegiaPeError::InvalidPe(
+            "image exceeds maximum size (256 MiB)",
+        )));
+    }
+    fs::read(path).map_err(RunError::from)
+}
+
+fn path_is_symlink(path: &Path) -> Result<bool, RunError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    Ok(path
+        .symlink_metadata()
+        .map_err(RunError::from)?
+        .file_type()
+        .is_symlink())
+}
+
 fn run_protect(
     input: &Path,
     output: &Path,
     mode: ProtectMode,
     verify: bool,
 ) -> Result<(), RunError> {
-    let bytes = fs::read(input)?;
+    let bytes = read_input_capped(input)?;
     match mode {
         ProtectMode::DryRun => {
             naegia_pe::parse_and_validate_pe64(&bytes)?;
@@ -304,12 +325,23 @@ fn run_protect(
 }
 
 fn write_output(path: &Path, data: &[u8], verify: bool) -> Result<(), RunError> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if path_is_symlink(path)? {
+        return Err(RunError::Config("output path must not be a symlink"));
     }
-    let tmp = path.with_extension("naegia.tmp");
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if path_is_symlink(parent)? {
+        return Err(RunError::Config(
+            "output parent directory must not be a symlink",
+        ));
+    }
+    fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(
+        ".naegia-{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("out")
+    ));
     fs::write(&tmp, data)?;
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);

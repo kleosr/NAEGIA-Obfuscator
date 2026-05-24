@@ -5,6 +5,7 @@
 //!
 //! Run with:  cargo test -p naegia-pe --test fuzz
 
+use naegia_pe::MAX_INPUT_BYTES;
 use proptest::prelude::*;
 
 /// Strategy: a random byte vector with length in [0, 64) — too small for DOS header.
@@ -145,6 +146,12 @@ fn parse_and_validate_pe64_rejects_alternating_bits() {
 fn protect_identity_never_panics_on_garbage() {
     let garbage = vec![0xDEu8, 0xAD, 0xBE, 0xEF];
     let _ = naegia_pe::protect_identity(&garbage);
+}
+
+#[test]
+fn parse_rejects_image_over_max_len_without_huge_alloc() {
+    assert!(naegia_pe::ensure_image_fits(MAX_INPUT_BYTES + 1).is_err());
+    assert!(naegia_pe::ensure_image_fits(MAX_INPUT_BYTES).is_ok());
 }
 
 #[test]

@@ -30,9 +30,10 @@ mod transform;
 mod validate;
 
 pub use anti_analysis::DEFAULT_ENTROPY_OVERLAY_LEN;
-pub use config::{ProtectConfig, MAX_OVERLAY_LEN};
+pub use config::{ProtectConfig, MAX_INPUT_BYTES, MAX_OVERLAY_LEN};
 pub use error::{NaegiaPeError, Result};
 pub use imports::import_dll_names;
+pub use inspect::authenticode_likely;
 pub use inspect::PeInspectReport;
 pub use preset::Preset;
 pub use raw::debug_data_directory_entry;
@@ -40,4 +41,5 @@ pub use transform::{
     protect_identity, protect_obfuscate_metadata, protect_strip_debug_and_checksum,
     protect_with_config, strip_debug_data_directory, verify_written_image,
 };
+pub use validate::ensure_image_fits;
 pub use validate::parse_and_validate_pe64;

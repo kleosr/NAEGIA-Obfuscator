@@ -6,6 +6,9 @@ use crate::error::{NaegiaPeError, Result};
 /// Maximum entropy tail size (16 KiB).
 pub const MAX_OVERLAY_LEN: usize = 16 * 1024;
 
+/// Maximum PE image size accepted for parse/protect (256 MiB).
+pub const MAX_INPUT_BYTES: usize = 256 * 1024 * 1024;
+
 /// All optional transforms. Fields use `Default` (all `false`) for the conservative path.
 /// Construct with [`metadata_only`](Self::metadata_only), [`lab`](crate::preset::ProtectConfig::lab),
 /// or [`from_preset`](crate::preset::ProtectConfig::from_preset).
