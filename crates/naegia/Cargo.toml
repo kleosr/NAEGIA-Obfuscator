@@ -1,11 +1,12 @@
 [package]
 name = "naegia"
-version = "0.1.3"
+version = "1.0.3"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "NAEGIA Windows PE protection CLI"
 readme = "../../README.md"
+repository.workspace = true
 
 [[bin]]
 name = "naegia"
@@ -13,9 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-naegia-pe = { path = "../naegia-pe" }
+naegia-pe = { path = "../naegia-pe", version = "1.0.3" }
 thiserror = "2"
 
 [dev-dependencies]
 goblin = "0.9.3"
-naegia-pe = { path = "../naegia-pe" }
+naegia-pe = { path = "../naegia-pe", version = "1.0.3" }

@@ -125,6 +125,23 @@ enum ProtectMode {
     Obfuscate(ProtectConfig),
 }
 
+#[derive(Clone, Copy)]
+struct ProtectCliOptions {
+    preset: Option<Preset>,
+    strip_debug: bool,
+    no_overlay: bool,
+    overlay_len: Option<usize>,
+    decoy_metadata: bool,
+    nuclear_metadata: bool,
+    patterned_overlay: bool,
+    redirect_entry: bool,
+    anti_debug_entry: bool,
+    xor_rdata_zero_runs: bool,
+    random_seed: bool,
+    fixed_seed: Option<u64>,
+    scrub_pdb: bool,
+}
+
 fn main() -> process::ExitCode {
     match run() {
         Ok(()) => process::ExitCode::from(EXIT_OK as u8),
@@ -163,8 +180,8 @@ fn run() -> Result<(), RunError> {
             scrub_pdb,
             verify,
         } => {
-            let cfg = build_protect_config(
-                preset.map(Preset::from),
+            let cfg = build_protect_config(ProtectCliOptions {
+                preset: preset.map(Preset::from),
                 strip_debug,
                 no_overlay,
                 overlay_len,
@@ -175,9 +192,9 @@ fn run() -> Result<(), RunError> {
                 anti_debug_entry,
                 xor_rdata_zero_runs,
                 random_seed,
-                seed,
+                fixed_seed: seed,
                 scrub_pdb,
-            )?;
+            })?;
             cfg.validate()
                 .map_err(|_| RunError::Config("invalid protect config"))?;
             run_protect(
@@ -191,69 +208,61 @@ fn run() -> Result<(), RunError> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_protect_config(
-    preset: Option<Preset>,
-    strip_debug: bool,
-    no_overlay: bool,
-    overlay_len: Option<usize>,
-    decoy_metadata: bool,
-    nuclear_metadata: bool,
-    patterned_overlay: bool,
-    redirect_entry: bool,
-    anti_debug_entry: bool,
-    xor_rdata_zero_runs: bool,
-    random_seed: bool,
-    fixed_seed: Option<u64>,
-    scrub_pdb: bool,
-) -> Result<ProtectConfig, RunError> {
-    let mut cfg = if let Some(p) = preset {
-        ProtectConfig::from_preset(p)
-    } else {
-        ProtectConfig {
-            append_entropy_overlay: !no_overlay,
-            overlay_len: overlay_len.unwrap_or(DEFAULT_ENTROPY_OVERLAY_LEN),
-            strip_debug,
-            ..ProtectConfig::lab()
-        }
-    };
+fn build_protect_config(options: ProtectCliOptions) -> Result<ProtectConfig, RunError> {
+    let mut cfg = base_protect_config(options);
+    apply_overlay_options(&mut cfg, options)?;
+    apply_layer_options(&mut cfg, options);
+    Ok(cfg)
+}
 
-    if preset.is_none() {
-        cfg.strip_debug |= strip_debug;
-    } else if strip_debug {
+fn base_protect_config(options: ProtectCliOptions) -> ProtectConfig {
+    let mut cfg = match options.preset {
+        Some(preset) => ProtectConfig::from_preset(preset),
+        None => ProtectConfig {
+            append_entropy_overlay: !options.no_overlay,
+            overlay_len: options.overlay_len.unwrap_or(DEFAULT_ENTROPY_OVERLAY_LEN),
+            strip_debug: options.strip_debug,
+            ..ProtectConfig::lab()
+        },
+    };
+    if options.strip_debug {
         cfg.strip_debug = true;
     }
+    cfg
+}
 
-    if no_overlay {
+fn apply_overlay_options(
+    cfg: &mut ProtectConfig,
+    options: ProtectCliOptions,
+) -> Result<(), RunError> {
+    if options.no_overlay {
         cfg.append_entropy_overlay = false;
     }
-    if let Some(len) = overlay_len {
+    if let Some(len) = options.overlay_len {
+        if len == 0 && !options.no_overlay {
+            return Err(RunError::Config("overlay_len 0 requires --no-overlay"));
+        }
         cfg.overlay_len = len;
         if len > 0 {
             cfg.append_entropy_overlay = true;
         }
     }
-    if overlay_len.is_some() && overlay_len == Some(0) && !no_overlay {
-        return Err(RunError::Config("overlay_len 0 requires --no-overlay"));
-    }
     if cfg.overlay_len > MAX_OVERLAY_LEN {
         return Err(RunError::Config("overlay_len exceeds 16384"));
     }
+    Ok(())
+}
 
-    cfg.decoy_metadata |= decoy_metadata;
-    cfg.nuclear_metadata |= nuclear_metadata;
-    cfg.patterned_entropy_overlay |= patterned_overlay;
-    cfg.redirect_entry |= redirect_entry;
-    cfg.anti_debug_entry |= anti_debug_entry;
-    cfg.xor_rdata_zero_runs |= xor_rdata_zero_runs;
-    cfg.random_seed |= random_seed;
-    cfg.scrub_pdb_paths |= scrub_pdb;
-    if let Some(s) = fixed_seed {
-        cfg.fixed_seed = Some(s);
-        cfg.random_seed = true;
-    }
-
-    Ok(cfg)
+fn apply_layer_options(cfg: &mut ProtectConfig, options: ProtectCliOptions) {
+    cfg.decoy_metadata |= options.decoy_metadata;
+    cfg.nuclear_metadata |= options.nuclear_metadata;
+    cfg.patterned_entropy_overlay |= options.patterned_overlay;
+    cfg.redirect_entry |= options.redirect_entry;
+    cfg.anti_debug_entry |= options.anti_debug_entry;
+    cfg.xor_rdata_zero_runs |= options.xor_rdata_zero_runs;
+    cfg.random_seed |= options.random_seed || options.fixed_seed.is_some();
+    cfg.fixed_seed = options.fixed_seed.or(cfg.fixed_seed);
+    cfg.scrub_pdb_paths |= options.scrub_pdb;
 }
 
 fn resolve_protect_mode(dry_run: bool, identity: bool, config: ProtectConfig) -> ProtectMode {

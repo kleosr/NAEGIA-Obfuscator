@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://img.shields.io/badge/rust-1.82+-orange?logo=rust&style=flat-square" />
   <img src="https://img.shields.io/badge/target-x86_64--windows--msvc-blue?style=flat-square" />
-  <img src="https://img.shields.io/github/v/tag/your-org/NAEGIA-Obfuscator?style=flat-square" />
+  <img src="https://img.shields.io/github/v/tag/kleosr/NAEGIA-Obfuscator?style=flat-square" />
   <img src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat-square" />
 </div>
 
@@ -21,10 +21,10 @@
 
 ```bash
 # From source (requires Rust 1.82+)
-cargo install --git https://github.com/your-org/NAEGIA-Obfuscator
+cargo install --git https://github.com/kleosr/NAEGIA-Obfuscator
 
 # Or build from the workspace
-git clone https://github.com/your-org/NAEGIA-Obfuscator.git
+git clone https://github.com/kleosr/NAEGIA-Obfuscator.git
 cd NAEGIA-Obfuscator
 cargo build --workspace --release
 # Binary at target/release/naegia.exe
@@ -160,7 +160,7 @@ NAEGIA-Obfuscator/
 │       ├── anti_analysis/      # fingerprint hardening, entropy overlay
 │       ├── config.rs           # ProtectConfig struct + validation
 │       ├── layout.rs           # PE32+ layout constants
-│       ├── obfuscate.rs        # FNV-1a seed, DOS stub, section name gen
+│       ├── obfuscate/          # FNV-1a seed, DOS stub, section name gen
 │       ├── raw.rs              # Raw byte-offset arithmetic (e_lfanew, PE sig)
 │       ├── strings_pad.rs      # XOR section-end padding in .rdata
 │       ├── trampoline.rs       # Code cave search + entry jmp stub
@@ -176,7 +176,7 @@ NAEGIA-Obfuscator/
 ## Development
 
 ```bash
-git clone https://github.com/your-org/NAEGIA-Obfuscator.git
+git clone https://github.com/kleosr/NAEGIA-Obfuscator.git
 cd NAEGIA-Obfuscator
 
 # Check
@@ -196,8 +196,8 @@ Integration tests live in `crates/naegia/tests/`. They use `CARGO_BIN_EXE_naegia
 
 | Suite | Count | What |
 |-------|-------|------|
-| Unit (naegia-pe lib) | 8 | Config validation, entropy, obfuscate, raw offset, padding XOR |
-| Fuzz (naegia-pe) | 19 | Panic-free parsing on adversarial inputs |
+| Unit (naegia-pe lib) | 13 | Config validation, entropy, obfuscate, raw offset, padding XOR |
+| Fuzz (naegia-pe) | 20 | Panic-free parsing on adversarial inputs |
 | Integration (naegia) | 16 | CLI correctness, all flag combinations, identity, dry-run, regression |
 
 ## CI/CD

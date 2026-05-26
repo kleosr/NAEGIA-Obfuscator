@@ -26,8 +26,6 @@ fn is_initialized_readonly_data(ch: u32) -> bool {
 /// `SizeOfRawData`. The PE spec guarantees these bytes are zero in the file
 /// and unreferenced at runtime, making them safe to XOR regardless of what
 /// PE data structures or CRT tables the section contains.
-///
-/// Returns the number of bytes modified.
 pub fn xor_zero_runs_in_rdata(
     image: &mut [u8],
     sections: &[SectionTable],

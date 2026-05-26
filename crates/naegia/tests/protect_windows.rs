@@ -4,6 +4,7 @@ mod common;
 
 use std::process::Command;
 
+use goblin::pe::PE;
 use naegia_pe::{
     debug_data_directory_entry, import_dll_names, parse_and_validate_pe64,
     DEFAULT_ENTROPY_OVERLAY_LEN,
@@ -71,11 +72,26 @@ fn protect_default_obfuscates_preserves_loader_surface_and_runs() {
         "default protect must change metadata (not byte-identical)"
     );
 
-    let pe_in = parse_and_validate_pe64(&before).unwrap();
-    let pe_out = parse_and_validate_pe64(&after).unwrap();
+    assert_default_loader_surface_changes(&before, &after);
+    assert_dos_header_preserved(&before, &after);
+    assert_eq!(
+        after.len(),
+        before.len() + DEFAULT_ENTROPY_OVERLAY_LEN,
+        "default path appends fixed-size entropy tail"
+    );
+    common::assert_runs_hello(&out);
+}
+
+fn assert_default_loader_surface_changes(before: &[u8], after: &[u8]) {
+    let pe_in = parse_and_validate_pe64(before).unwrap();
+    let pe_out = parse_and_validate_pe64(after).unwrap();
     assert_eq!(import_dll_names(&pe_in), import_dll_names(&pe_out));
     common::assert_loader_relevant_layout_eq(&pe_in, &pe_out);
+    assert_version_fields_changed(&pe_in, &pe_out);
+    assert_section_names_changed(&pe_in, &pe_out);
+}
 
+fn assert_version_fields_changed(pe_in: &PE<'_>, pe_out: &PE<'_>) {
     let opt_in = pe_in.header.optional_header.as_ref().expect("opt in");
     let opt_out = pe_out.header.optional_header.as_ref().expect("opt out");
     assert_ne!(
@@ -97,33 +113,24 @@ fn protect_default_obfuscates_preserves_loader_surface_and_runs() {
         (win_out.major_image_version, win_out.minor_image_version),
         "image version words should be obfuscated (cosmetic for the loader)"
     );
+}
 
+fn assert_section_names_changed(pe_in: &PE<'_>, pe_out: &PE<'_>) {
     let names_in: Vec<[u8; 8]> = pe_in.sections.iter().map(|s| s.name).collect();
     let names_out: Vec<[u8; 8]> = pe_out.sections.iter().map(|s| s.name).collect();
     assert_ne!(
         names_in, names_out,
         "section names should be obfuscated for this fixture"
     );
+}
 
+fn assert_dos_header_preserved(before: &[u8], after: &[u8]) {
     assert_eq!(&before[0..2], &after[0..2], "MZ signature must remain");
     assert_eq!(
         &before[0x3c..0x40],
         &after[0x3c..0x40],
         "e_lfanew must remain"
     );
-    assert_eq!(
-        after.len(),
-        before.len() + DEFAULT_ENTROPY_OVERLAY_LEN,
-        "default path appends fixed-size entropy tail"
-    );
-
-    let run = Command::new(&out).output().expect("run obfuscated exe");
-    assert!(
-        run.status.success(),
-        "obfuscated exe failed: {:?}",
-        run.stderr
-    );
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "HELLO");
 }
 
 #[test]

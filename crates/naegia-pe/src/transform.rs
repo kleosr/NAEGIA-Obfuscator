@@ -68,11 +68,7 @@ pub fn protect_strip_debug_and_checksum(image: &[u8]) -> Result<Vec<u8>> {
 /// Full pipeline with optional aggressive layers (entry trampoline, decoy metadata, etc.).
 pub fn protect_with_config(image: &[u8], config: &ProtectConfig) -> Result<Vec<u8>> {
     config.validate()?;
-    if config.append_entropy_overlay && authenticode_likely(image) {
-        return Err(NaegiaPeError::InvalidPe(
-            "authenticode certificate directory present; use --no-overlay or --preset signed",
-        ));
-    }
+    reject_overlay_for_signed_image(image, config)?;
     let pe = parse_and_validate_pe64(image)?;
     let sections: Vec<SectionTable> = pe.sections.clone();
 
@@ -80,24 +76,62 @@ pub fn protect_with_config(image: &[u8], config: &ProtectConfig) -> Result<Vec<u
     let seed = protect_seed(image, random_entropy);
 
     let mut out = image.to_vec();
-    if config.strip_debug {
-        let _ = wipe_debug_info(&mut out, &sections)?;
-    }
-    if config.scrub_pdb_paths {
-        let _ = scrub_pdb_path_strings(&mut out, &sections)?;
-    }
-    if config.obfuscate_metadata {
-        apply_metadata_obfuscation(&mut out, seed, config.decoy_metadata)?;
-        apply_fingerprint_pass(&mut out, seed, config, random_ts)?;
-    }
-    if config.xor_rdata_zero_runs {
-        strings_pad::xor_zero_runs_in_rdata(&mut out, &sections, seed)?;
-    }
+    apply_debug_scrub_passes(&mut out, &sections, config)?;
+    apply_metadata_pass_if_configured(&mut out, seed, config, random_ts)?;
+    apply_rdata_padding_if_configured(&mut out, &sections, config, seed)?;
     apply_entry_redirect_if_configured(&mut out, &sections, config, seed)?;
     push_configured_entropy_overlay(&mut out, seed, config);
     write_pe_checksum(&mut out)?;
     validate_pe64_after_transform(&out)?;
     Ok(out)
+}
+
+fn reject_overlay_for_signed_image(image: &[u8], config: &ProtectConfig) -> Result<()> {
+    if config.append_entropy_overlay && authenticode_likely(image) {
+        return Err(NaegiaPeError::InvalidPe(
+            "authenticode certificate directory present; use --no-overlay or --preset signed",
+        ));
+    }
+    Ok(())
+}
+
+fn apply_debug_scrub_passes(
+    image: &mut [u8],
+    sections: &[SectionTable],
+    config: &ProtectConfig,
+) -> Result<()> {
+    if config.strip_debug {
+        let _ = wipe_debug_info(image, sections)?;
+    }
+    if config.scrub_pdb_paths {
+        let _ = scrub_pdb_path_strings(image, sections)?;
+    }
+    Ok(())
+}
+
+fn apply_metadata_pass_if_configured(
+    image: &mut [u8],
+    seed: u64,
+    config: &ProtectConfig,
+    random_ts: Option<u32>,
+) -> Result<()> {
+    if !config.obfuscate_metadata {
+        return Ok(());
+    }
+    apply_metadata_obfuscation(image, seed, config.decoy_metadata)?;
+    apply_fingerprint_pass(image, seed, config, random_ts)
+}
+
+fn apply_rdata_padding_if_configured(
+    image: &mut [u8],
+    sections: &[SectionTable],
+    config: &ProtectConfig,
+    seed: u64,
+) -> Result<()> {
+    if config.xor_rdata_zero_runs {
+        strings_pad::xor_zero_runs_in_rdata(image, sections, seed)?;
+    }
+    Ok(())
 }
 
 /// Default protection: metadata + static fingerprint + optional entropy tail (see [`ProtectConfig`]).
