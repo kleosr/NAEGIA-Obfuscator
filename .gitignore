@@ -22,8 +22,9 @@ $RECYCLE.BIN/
 .vscode/
 *.code-workspace
 
-# Cursor / local agent state (paths vary by install)
+# Cursor / Codex local agent state (paths vary by install)
 .cursor/
+.codex/
 
 # Secrets & local env
 .env
